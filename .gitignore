@@ -1,0 +1,28 @@
+# 操作系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 编辑器配置
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 临时文件
+*.tmp
+*.log
+*.cache
+
+# Node modules (如果将来添加)
+node_modules/
+
+# 用户数据和测试文件
+模板明细*.xlsx
+*测试*.xlsx
+*.bak
+
+# 编译输出（如果有）
+dist/
+build/
