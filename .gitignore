@@ -26,3 +26,7 @@ node_modules/
 # 编译输出（如果有）
 dist/
 build/
+
+# FaaS 部署文件
+deployment.zip
+.robot/
