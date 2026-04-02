@@ -1,0 +1,26 @@
+# Git 相关
+.git
+.gitignore
+.gitlab-ci.yml
+
+# Docker 相关
+Dockerfile
+.dockerignore
+
+# 文档和测试文件
+README.md
+*.md
+测试*.md
+版本说明*.md
+
+# Excel 测试文件
+*.xlsx
+
+# 临时文件
+*.tmp
+*.log
+*.bak
+
+# 编辑器配置
+.vscode
+.idea

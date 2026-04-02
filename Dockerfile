@@ -3,8 +3,9 @@ FROM artifactory.ep.chehejia.com/licloud-docker/base/run/nginx:1.14.2-alpine-202
 # 将静态文件复制到 Nginx 默认静态目录
 COPY . /usr/share/nginx/html/
 
-# 直接创建 Nginx 配置文件，固定使用 8080 端口
-RUN echo 'server { \
+# 删除默认配置，避免端口冲突
+RUN rm -f /etc/nginx/conf.d/default.conf && \
+    echo 'server { \
     listen 8080; \
     server_name localhost; \
     location / { \
