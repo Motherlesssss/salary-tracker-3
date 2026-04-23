@@ -586,7 +586,18 @@ function bindDragEvents(canvas) {
             isDragging = true;
             dragBarIndex = elements[0].index;
             startY = e.clientY - canvas.getBoundingClientRect().top;
-            startValue = chartData.adjustedAmounts[dragBarIndex];
+
+            // 根据视图类型获取起始值
+            const currentView = state.currentVehicle;
+            if (currentView.startsWith('__')) {
+                // 汇总视图
+                startValue = chartData.adjustedAmounts[dragBarIndex];
+            } else {
+                // 单个车型视图
+                const vehicleData = state.results[currentView];
+                startValue = vehicleData && vehicleData[dragBarIndex] ? vehicleData[dragBarIndex].ratio : 0;
+            }
+
             canvas.style.cursor = 'grabbing';
         }
     });
@@ -608,16 +619,30 @@ function bindDragEvents(canvas) {
         // 限制范围
         newValue = Math.max(0, newValue);
 
-        // 更新数据
-        chartData.adjustedAmounts[dragBarIndex] = newValue;
+        // 判断当前视图类型
+        const currentView = state.currentVehicle;
+        const isIndividualVehicle = !currentView.startsWith('__');
 
-        // 记录相对系数而非绝对值
-        const originalValue = chartData.originalAmounts[dragBarIndex];
-        if (originalValue > 0) {
-            const multiplier = newValue / originalValue;
-            chartData.adjustments[dragBarIndex] = multiplier;
+        if (isIndividualVehicle) {
+            // 单个车型视图：直接更新该车型的比例
+            const vehicleData = state.results[currentView];
+            if (vehicleData && vehicleData[dragBarIndex]) {
+                vehicleData[dragBarIndex].ratio = newValue;
+                // 同步更新图表数据
+                chartInstance.data.datasets[0].data[dragBarIndex] = newValue;
+            }
         } else {
-            chartData.adjustments[dragBarIndex] = 1; // 原始值为0时，系数设为1
+            // 汇总视图：更新adjustedAmounts
+            chartData.adjustedAmounts[dragBarIndex] = newValue;
+
+            // 记录相对系数而非绝对值
+            const originalValue = chartData.originalAmounts[dragBarIndex];
+            if (originalValue > 0) {
+                const multiplier = newValue / originalValue;
+                chartData.adjustments[dragBarIndex] = multiplier;
+            } else {
+                chartData.adjustments[dragBarIndex] = 1;
+            }
         }
 
         // 更新图表
@@ -628,13 +653,19 @@ function bindDragEvents(canvas) {
         if (now - lastUpdateTime > updateInterval) {
             lastUpdateTime = now;
 
-            // 反向分配到各车型
-            redistributeToVehicles();
-
-            // 实时更新表格和统计
-            renderSummaryTable();
-            updateAdjustmentStats();
-            updateSummaryTargetInput();
+            if (!isIndividualVehicle) {
+                // 汇总视图：反向分配到各车型
+                redistributeToVehicles();
+                renderSummaryTable();
+                updateAdjustmentStats();
+                updateSummaryTargetInput();
+            } else {
+                // 单个车型：重新归一化并更新表格
+                normalizeVehicleRatios(currentView);
+                if (window.renderResultsTable) {
+                    window.renderResultsTable(currentView);
+                }
+            }
         }
     });
 
@@ -642,12 +673,27 @@ function bindDragEvents(canvas) {
         if (isDragging) {
             isDragging = false;
 
-            // 最终更新一次（确保数据准确）
-            redistributeToVehicles();
-            chartInstance.update();
-            renderSummaryTable();
-            updateAdjustmentStats();
-            updateSummaryTargetInput();
+            const currentView = state.currentVehicle;
+            const isIndividualVehicle = !currentView.startsWith('__');
+
+            if (!isIndividualVehicle) {
+                // 汇总视图：最终更新一次
+                redistributeToVehicles();
+                chartInstance.update();
+                renderSummaryTable();
+                updateAdjustmentStats();
+                updateSummaryTargetInput();
+            } else {
+                // 单个车型：重新归一化并更新
+                normalizeVehicleRatios(currentView);
+                chartInstance.update();
+                if (window.renderResultsTable) {
+                    window.renderResultsTable(currentView);
+                }
+                if (window.renderSummary) {
+                    window.renderSummary(currentView);
+                }
+            }
 
             canvas.style.cursor = 'grab';
             dragBarIndex = null;
@@ -1201,7 +1247,7 @@ window.updateChartForVehicle = function(vehicle) {
             labels: labels,
             datasets: [{
                 label: vehicleLabel,
-                data: ratios,
+                data: ratios,  // 初始数据使用ratios数组
                 backgroundColor: function() {
                     if (vehicleType === 'new') return 'rgba(33, 150, 243, 0.8)'; // 蓝色
                     if (vehicleType === 'clearStock') return 'rgba(255, 152, 0, 0.8)'; // 橙色
@@ -1277,6 +1323,10 @@ window.updateChartForVehicle = function(vehicle) {
                         minRotation: 45
                     }
                 }
+            },
+            // 添加动画配置，让图表更新更流畅
+            animation: {
+                duration: 0  // 拖拽时禁用动画以提高性能
             }
         }
     });
@@ -1301,3 +1351,35 @@ window.updateChartForVehicle = function(vehicle) {
 
     console.log('[updateChartForVehicle] 单个车型图表创建完成');
 };
+
+// ============== 单个车型比例归一化 ==============
+/**
+ * 重新归一化单个车型的每日比例，确保总和为100%
+ */
+function normalizeVehicleRatios(vehicle) {
+    const vehicleData = state.results[vehicle];
+    if (!vehicleData) {
+        console.warn('[normalizeVehicleRatios] 车型数据不存在:', vehicle);
+        return;
+    }
+
+    // 计算总比例
+    const totalRatio = vehicleData.reduce((sum, day) => sum + (day.ratio || 0), 0);
+
+    if (totalRatio <= 0) {
+        console.warn('[normalizeVehicleRatios] 总比例为0，无法归一化');
+        return;
+    }
+
+    // 归一化到100%
+    vehicleData.forEach(day => {
+        day.ratio = (day.ratio / totalRatio) * 100;
+    });
+
+    // 同步更新图表数据
+    if (chartInstance && chartInstance.data.datasets[0]) {
+        chartInstance.data.datasets[0].data = vehicleData.map(day => day.ratio);
+    }
+
+    console.log('[normalizeVehicleRatios] 车型 ' + vehicle + ' 比例已归一化');
+}
