@@ -40,15 +40,10 @@ function initializeChart() {
             clearTimeout(autoSwitchTimer);
         }
 
-        // 添加"汇总"标签页
-        addSummaryTab();
+        // 不再添加汇总标签，app.js已经创建了所有标签
+        // addSummaryTab();
 
-        // 只在用户没有手动切换时才自动切换到汇总
-        autoSwitchTimer = setTimeout(() => {
-            if (!userHasSwitched) {
-                window.switchVehicle('__SUMMARY__');
-            }
-        }, 100);
+        // 图表已经由app.js的displayResults初始化，不需要自动切换
     };
 
     // Hook 原有的 switchVehicle
@@ -230,12 +225,10 @@ function addSummaryTab() {
 
 // ============== 显示汇总视图 ==============
 function showSummaryView() {
-    console.log('[showSummaryView] 开始显示汇总视图');
-    console.log('[showSummaryView] 设置 state.currentVehicle = "__SUMMARY__"');
+    const currentView = state.currentVehicle;
+    console.log('[showSummaryView] 显示汇总视图:', currentView);
 
-    state.currentVehicle = '__SUMMARY__';
-
-    // 计算汇总数据
+    // 计算汇总数据（根据视图类型）
     calculateSummaryData();
 
     console.log('[showSummaryView] 显示图表区域');
@@ -245,7 +238,7 @@ function showSummaryView() {
         chartArea.style.display = 'block';
     }
 
-    // 创建/更新图表
+    // 创建/更新图表（传入视图类型）
     createSummaryChart();
 
     console.log('[showSummaryView] 渲染汇总表格');
@@ -256,7 +249,13 @@ function showSummaryView() {
     // 更新目标量输入
     updateSummaryTargetInput();
 
-    console.log('[showSummaryView] 汇总视图显示完成，当前 state.currentVehicle:', state.currentVehicle);
+    // 隐藏去年同期面板（汇总视图不显示）
+    const historyPanel = document.getElementById('historyPanel');
+    if (historyPanel) {
+        historyPanel.style.display = 'none';
+    }
+
+    console.log('[showSummaryView] 汇总视图显示完成');
 }
 
 // ============== 计算汇总数据 ==============
@@ -268,15 +267,43 @@ function calculateSummaryData() {
         return;
     }
 
-    const vehicles = Object.keys(state.results).filter(v => v !== '__SUMMARY__');
-    if (vehicles.length === 0) {
+    const currentView = state.currentVehicle;
+    let vehiclesToSum = [];
+
+    // 根据视图类型选择要汇总的车型
+    if (currentView === '__HISTORICAL_SUMMARY__') {
+        // 历史车型汇总：只包含历史+去库存车型
+        vehiclesToSum = Object.keys(state.results).filter(code => {
+            if (code.startsWith('__')) return false; // 排除特殊视图
+            const config = state.vehicleConfig[code];
+            return config && config.enabled && (config.type === 'historical' || config.type === 'clearStock');
+        });
+        console.log('[calculateSummaryData] 历史车型汇总，包含车型:', vehiclesToSum);
+    } else if (currentView === '__TOTAL_SUMMARY__') {
+        // 总览：包含所有启用的车型
+        vehiclesToSum = Object.keys(state.results).filter(code => {
+            if (code.startsWith('__')) return false;
+            const config = state.vehicleConfig[code];
+            return config && config.enabled;
+        });
+        console.log('[calculateSummaryData] 总览，包含所有车型:', vehiclesToSum);
+    } else if (currentView === '__SUMMARY__') {
+        // 旧的汇总视图（兼容）
+        vehiclesToSum = Object.keys(state.results).filter(v => !v.startsWith('__'));
+        console.log('[calculateSummaryData] 旧汇总视图（兼容）:', vehiclesToSum);
+    } else {
+        console.warn('[calculateSummaryData] 未知的视图类型:', currentView);
+        return;
+    }
+
+    if (vehiclesToSum.length === 0) {
         console.warn('[calculateSummaryData] 没有车型数据');
         return;
     }
 
-    console.log('[calculateSummaryData] 车型列表:', vehicles);
+    console.log('[calculateSummaryData] 车型列表:', vehiclesToSum);
 
-    const daysInMonth = state.results[vehicles[0]].length;
+    const daysInMonth = state.results[vehiclesToSum[0]].length;
     console.log('[calculateSummaryData] 月份天数:', daysInMonth);
 
     // 重置所有数据
@@ -290,21 +317,21 @@ function calculateSummaryData() {
 
     if (!hasManualAdjustments) {
         chartData.adjustedVehicleData = {};
-        vehicles.forEach(vehicle => {
+        vehiclesToSum.forEach(vehicle => {
             chartData.adjustedVehicleData[vehicle] = [];
         });
     }
 
     // 计算每日汇总
     for (let dayIndex = 0; dayIndex < daysInMonth; dayIndex++) {
-        const dateObj = state.results[vehicles[0]][dayIndex];
+        const dateObj = state.results[vehiclesToSum[0]][dayIndex];
         const date = new Date(dateObj.date);
         chartData.labels.push(`${date.getMonth() + 1}/${date.getDate()}`);
 
         let dayTotal = 0;
         const breakdown = {};
 
-        vehicles.forEach(vehicle => {
+        vehiclesToSum.forEach(vehicle => {
             const dayRatio = state.results[vehicle][dayIndex].ratio;
             const vehicleTarget = state.vehicleTargets[vehicle] || 0;
 
@@ -521,8 +548,25 @@ function createSummaryChart() {
         }
     });
 
-    // 绑定拖拽事件
-    bindDragEvents(canvas);
+    // 只在非总览视图时绑定拖拽事件
+    const currentView = state.currentVehicle;
+    const isDraggable = currentView !== '__TOTAL_SUMMARY__';
+
+    if (isDraggable) {
+        // 绑定拖拽事件
+        bindDragEvents(canvas);
+        console.log('[createSummaryChart] 拖拽功能已启用 (' + currentView + ')');
+    } else {
+        // 总览视图不允许拖拽
+        console.log('[createSummaryChart] 总览视图，拖拽功能已禁用');
+
+        // 显示提示
+        const chartHint = document.querySelector('.chart-hint');
+        if (chartHint) {
+            chartHint.innerHTML = '💡 <strong>提示：</strong>总览视图为只读，无法调整。如需调整，请切换到"历史车型汇总"或单个车型标签页';
+            chartHint.style.background = '#FFF9E5';
+        }
+    }
 
     // 更新统计信息
     updateAdjustmentStats();
@@ -1089,3 +1133,171 @@ document.addEventListener('DOMContentLoaded', function() {
     console.log('📊 汇总可视化拖拽模块已加载');
     console.log('💡 提示：切换到"汇总"标签可拖拽调整总量');
 });
+
+// ============== 单个车型图表支持 ==============
+/**
+ * 为单个车型创建可视化图表
+ * 支持历史车型、新增车型、去库存车型的拖拽调整
+ */
+window.updateChartForVehicle = function(vehicle) {
+    console.log('[updateChartForVehicle] 切换到车型:', vehicle);
+
+    // 如果是汇总视图，使用汇总图表
+    if (vehicle === '__HISTORICAL_SUMMARY__' || vehicle === '__TOTAL_SUMMARY__' || vehicle === '__SUMMARY__') {
+        showSummaryView();
+        return;
+    }
+
+    // 单个车型：创建该车型的图表
+    const chartArea = document.getElementById('chartAdjustmentArea');
+    if (!chartArea) {
+        console.warn('[updateChartForVehicle] 图表区域不存在');
+        return;
+    }
+
+    // 显示图表区域
+    chartArea.style.display = 'block';
+
+    // 获取车型数据
+    const vehicleData = state.results[vehicle];
+    if (!vehicleData) {
+        console.warn('[updateChartForVehicle] 车型数据不存在:', vehicle);
+        return;
+    }
+
+    // 获取车型配置
+    const vehicleConfig = state.vehicleConfig[vehicle];
+    const vehicleType = vehicleConfig ? vehicleConfig.type : 'historical';
+    let vehicleLabel = vehicle;
+    if (vehicleType === 'new') {
+        vehicleLabel = `🆕 ${vehicle} (新增车型)`;
+    } else if (vehicleType === 'clearStock') {
+        vehicleLabel = `📉 ${vehicle} (去库存)`;
+    }
+
+    // 准备图表数据
+    const labels = [];
+    const ratios = [];
+    const hasTarget = state.vehicleTargets[vehicle] && state.vehicleTargets[vehicle] > 0;
+
+    vehicleData.forEach(day => {
+        const date = new Date(day.date);
+        labels.push(`${date.getMonth() + 1}/${date.getDate()}`);
+        ratios.push(day.ratio);
+    });
+
+    // 销毁旧图表
+    const canvas = document.getElementById('ratioChart');
+    const ctx = canvas.getContext('2d');
+    if (chartInstance) {
+        chartInstance.destroy();
+    }
+
+    // 创建新图表
+    const yAxisLabel = hasTarget ? '每日实际量' : '每日比例 (%)';
+    chartInstance = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: vehicleLabel,
+                data: ratios,
+                backgroundColor: function() {
+                    if (vehicleType === 'new') return 'rgba(33, 150, 243, 0.8)'; // 蓝色
+                    if (vehicleType === 'clearStock') return 'rgba(255, 152, 0, 0.8)'; // 橙色
+                    return 'rgba(76, 175, 80, 0.8)'; // 绿色
+                },
+                borderRadius: 6,
+                hoverBackgroundColor: function() {
+                    if (vehicleType === 'new') return 'rgba(33, 150, 243, 0.95)';
+                    if (vehicleType === 'clearStock') return 'rgba(255, 152, 0, 0.95)';
+                    return 'rgba(76, 175, 80, 0.95)';
+                },
+                datalabels: {
+                    align: 'end',
+                    anchor: 'end',
+                    color: '#1a1a1a',
+                    font: {
+                        size: 10,
+                        weight: 'bold'
+                    },
+                    formatter: function(value) {
+                        return value.toFixed(2) + '%';
+                    },
+                    display: true
+                }
+            }]
+        },
+        plugins: [ChartDataLabels],
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    display: true,
+                    position: 'top'
+                },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            return `比例: ${context.parsed.y.toFixed(2)}%`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    title: {
+                        display: true,
+                        text: yAxisLabel,
+                        font: {
+                            size: 12,
+                            weight: 'bold'
+                        }
+                    },
+                    ticks: {
+                        callback: function(value) {
+                            return value.toFixed(1) + '%';
+                        }
+                    }
+                },
+                x: {
+                    title: {
+                        display: true,
+                        text: '日期',
+                        font: {
+                            size: 12,
+                            weight: 'bold'
+                        }
+                    },
+                    ticks: {
+                        autoSkip: true,
+                        maxRotation: 45,
+                        minRotation: 45
+                    }
+                }
+            }
+        }
+    });
+
+    // 绑定拖拽事件（单个车型可以拖拽调整）
+    bindDragEvents(canvas);
+
+    // 更新提示文本
+    const chartHint = document.querySelector('.chart-hint');
+    if (chartHint) {
+        let hintText = '💡 <strong>使用提示：</strong>点击并拖拽柱状图上下移动来调整每日比例，系统会自动重新归一化保证总和为100%';
+        
+        if (vehicleType === 'new') {
+            hintText = '💡 <strong>新增车型：</strong>已应用节奏模板生成基础比例，您可以拖拽调整。调整后比例会自动归一化';
+        } else if (vehicleType === 'clearStock') {
+            hintText = '💡 <strong>去库存车型：</strong>已应用衰减曲线，您可以进一步拖拽调整。调整后比例会自动归一化';
+        }
+        
+        chartHint.innerHTML = hintText;
+        chartHint.style.background = '#FFF9E5';
+    }
+
+    console.log('[updateChartForVehicle] 单个车型图表创建完成');
+};
