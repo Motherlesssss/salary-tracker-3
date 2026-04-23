@@ -744,6 +744,11 @@ function redistributeToVehicles() {
                 }
                 chartData.adjustedVehicleData[vehicle][dayIndex] = newAmount;
                 chartData.vehicleBreakdown[dayIndex][vehicle] = newAmount;
+
+                // 【关键】同步到 state.results，让单车型图表能显示最新数据
+                if (state.results[vehicle]?.[dayIndex]) {
+                    state.results[vehicle][dayIndex].ratio = newAmount;
+                }
             });
         });
         return;
@@ -873,6 +878,27 @@ function redistributeToVehicles() {
             chartData.adjustedAmounts[dayIndex] = dayTotal;
         }
     }
+
+    // 第六步：【关键】将调整后的数据同步到 state.results，让单车型图表能显示最新数据
+    vehicles.forEach(vehicle => {
+        const vehicleTarget = state.vehicleTargets[vehicle] || 0;
+        const vehicleData = state.results[vehicle];
+
+        if (!vehicleData) return;
+
+        for (let dayIndex = 0; dayIndex < daysInMonth; dayIndex++) {
+            const adjustedAmount = chartData.adjustedVehicleData[vehicle]?.[dayIndex];
+            if (adjustedAmount !== undefined && vehicleData[dayIndex]) {
+                if (hasTarget && vehicleTarget > 0) {
+                    // 有目标量：将实际数量转换为比例
+                    vehicleData[dayIndex].ratio = (adjustedAmount / vehicleTarget) * 100;
+                } else {
+                    // 无目标量：adjustedAmount 本身就是比例
+                    vehicleData[dayIndex].ratio = adjustedAmount;
+                }
+            }
+        }
+    });
 
     // 更新各车型的表格显示
     vehicles.forEach(vehicle => {
