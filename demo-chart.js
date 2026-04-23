@@ -78,10 +78,11 @@ function initializeChart() {
         }
 
         try {
-            if (vehicle === '__SUMMARY__') {
+            // 支持新的视图类型
+            if (vehicle === '__SUMMARY__' || vehicle === '__HISTORICAL_SUMMARY__' || vehicle === '__TOTAL_SUMMARY__') {
                 // 切换到汇总视图
-                state.currentVehicle = '__SUMMARY__';
-                console.log('[demo-chart] Switching to SUMMARY view');
+                state.currentVehicle = vehicle;
+                console.log('[demo-chart] Switching to summary view:', vehicle);
                 showSummaryView();
 
                 // 更新标签状态
@@ -91,7 +92,7 @@ function initializeChart() {
                 document.querySelector(`.vehicle-tab[data-vehicle="${vehicle}"]`)?.classList.add('active');
 
                 switchInProgress = false;
-                console.log('[demo-chart] SUMMARY switch completed, switchInProgress reset to false');
+                console.log('[demo-chart] Summary switch completed, switchInProgress reset to false');
                 return; // 关键：不要继续执行原逻辑
             }
 

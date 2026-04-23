@@ -17,7 +17,18 @@ const state = {
     selectedRegion: null,    // 选中的区域
     storeAllocations: {},    // 各门店的月度目标分配 { storeName: number }
     storeData: {},           // 门店详细数据 { storeName: { vehicles, dailyTotals, monthlyTarget, adjustments } }
-    vehiclesUsingAverageRatio: []  // 使用平均比例的车型列表
+    vehiclesUsingAverageRatio: [],  // 使用平均比例的车型列表
+
+    // ============== 工作流状态管理（新增）==============
+    workflow: {
+        regionSelected: false,     // 步骤1：区域已选
+        dataUploaded: false,       // 步骤2：数据已上传
+        vehiclesConfigured: false, // 步骤2.5：车型已确认
+        monthSelected: false,      // 步骤3：月份已选
+        ratiosGenerated: false     // 步骤5：比例已生成
+    },
+    vehicleConfig: {},            // 车型详细配置 { vehicleCode: { name, type, enabled, ... } }
+    enabledVehicleCount: 0        // 启用的车型数量
 };
 
 // ============== 区域和门店数据 ==============
@@ -887,6 +898,8 @@ document.addEventListener('DOMContentLoaded', function() {
     initializeGenerateButton();
     initializeExportButton();
     initializeTargetInput();
+    initializeVehicleManagement();  // 新增：初始化车型管理
+    checkWorkflowState();  // 新增：初始化按钮状态
 });
 
 function initializeYearSelector() {
@@ -977,7 +990,17 @@ function handleFileUpload(file) {
             state.uploadedData = cleanedData;
             displayFileInfo(file.name, cleanedData.length);
             aggregateData();
-            checkCanGenerate();
+
+            // 更新workflow状态
+            state.workflow.dataUploaded = true;
+
+            // 初始化车型配置
+            initializeVehicleConfig();
+
+            // 不再调用checkCanGenerate，由workflow统一管理
+            checkWorkflowState();
+
+            console.log('步骤2完成：数据已上传，已提取车型列表');
 
         } catch (error) {
             alert('文件解析失败：' + error.message);
@@ -1051,6 +1074,513 @@ function aggregateData() {
     console.log('🔍 前3条聚合数据:', state.aggregatedData.slice(0, 3));
 }
 
+// ============== 工作流状态管理（新增）==============
+/**
+ * 统一的按钮状态控制函数
+ * 根据workflow状态启用/禁用各步骤的操作
+ */
+function checkWorkflowState() {
+    const { workflow } = state;
+
+    // 步骤2：上传数据区域
+    const uploadArea = document.getElementById('uploadArea');
+    if (uploadArea) {
+        if (!workflow.regionSelected) {
+            uploadArea.style.opacity = '0.5';
+            uploadArea.style.pointerEvents = 'none';
+            uploadArea.title = '请先选择区域';
+        } else {
+            uploadArea.style.opacity = '1';
+            uploadArea.style.pointerEvents = 'auto';
+            uploadArea.title = '';
+        }
+    }
+
+    // 步骤2.5：添加新车型按钮
+    const addNewVehicleBtn = document.getElementById('addNewVehicleBtn');
+    if (addNewVehicleBtn) {
+        addNewVehicleBtn.disabled = !workflow.dataUploaded;
+        if (!workflow.dataUploaded) {
+            addNewVehicleBtn.title = '请先上传数据';
+        } else {
+            addNewVehicleBtn.title = '';
+        }
+    }
+
+    // 步骤2.5：确认车型配置按钮
+    const confirmVehicleConfigBtn = document.getElementById('confirmVehicleConfigBtn');
+    if (confirmVehicleConfigBtn) {
+        const canConfirm = workflow.dataUploaded && state.enabledVehicleCount > 0;
+        confirmVehicleConfigBtn.disabled = !canConfirm;
+
+        const feedback = document.getElementById('vehicleConfigFeedback');
+        if (feedback) {
+            if (!workflow.dataUploaded) {
+                feedback.textContent = '请先上传数据';
+                feedback.style.color = '#999';
+            } else if (state.enabledVehicleCount === 0) {
+                feedback.textContent = '⚠️ 请至少启用一个车型';
+                feedback.style.color = '#F57C00';
+            } else {
+                feedback.textContent = `已启用 ${state.enabledVehicleCount} 个车型`;
+                feedback.style.color = '#2E7D32';
+            }
+        }
+    }
+
+    // 步骤3：月份选择
+    const yearSelect = document.getElementById('yearSelect');
+    const monthSelect = document.getElementById('monthSelect');
+    [yearSelect, monthSelect].forEach(el => {
+        if (el) {
+            el.disabled = !workflow.vehiclesConfigured;
+            if (!workflow.vehiclesConfigured) {
+                el.title = '请先确认车型配置';
+            } else {
+                el.title = '';
+            }
+        }
+    });
+
+    // 步骤5：生成按钮
+    const generateBtn = document.getElementById('generateBtn');
+    if (generateBtn) {
+        const canGenerate = workflow.vehiclesConfigured && workflow.monthSelected;
+        generateBtn.disabled = !canGenerate;
+
+        if (!workflow.vehiclesConfigured) {
+            generateBtn.title = '请先确认车型配置';
+        } else if (!workflow.monthSelected) {
+            generateBtn.title = '请先选择预测月份';
+        } else {
+            generateBtn.title = '';
+        }
+    }
+
+    // 步骤6：导出按钮
+    const exportBtn = document.getElementById('exportBtn');
+    const exportHorizontalBtn = document.getElementById('exportHorizontalBtn');
+    [exportBtn, exportHorizontalBtn].forEach(btn => {
+        if (btn) {
+            btn.disabled = !workflow.ratiosGenerated;
+            if (!workflow.ratiosGenerated) {
+                btn.title = '请先生成分配比例';
+            } else {
+                btn.title = '';
+            }
+        }
+    });
+}
+
+// ============== 车型管理模块（新增）==============
+
+/**
+ * 从历史数据初始化车型配置
+ */
+function initializeVehicleConfig() {
+    if (!state.aggregatedData) return;
+
+    // 提取所有唯一车型
+    const vehicleSet = new Set();
+    state.aggregatedData.forEach(row => {
+        vehicleSet.add(row.vehicle);
+    });
+
+    const vehicles = Array.from(vehicleSet).sort();
+
+    // 初始化车型配置（所有历史车型默认启用）
+    state.vehicleConfig = {};
+    vehicles.forEach(vehicleCode => {
+        state.vehicleConfig[vehicleCode] = {
+            code: vehicleCode,
+            name: vehicleCode, // 默认名称同代码
+            type: 'historical',  // 历史车型
+            enabled: true,
+            // 去库存配置（如果类型为clearStock时使用）
+            clearStock: {
+                startDate: null,
+                endDate: null
+            },
+            // 新增车型配置（如果类型为new时使用）
+            newVehicle: {
+                template: 'average',
+                launchDate: null
+            }
+        };
+    });
+
+    state.enabledVehicleCount = vehicles.length;
+
+    console.log('车型配置初始化完成:', vehicles.length, '个车型');
+
+    // 显示车型管理区域
+    const vehicleManagementSection = document.getElementById('vehicleManagementSection');
+    if (vehicleManagementSection) {
+        vehicleManagementSection.classList.remove('hidden');
+        vehicleManagementSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
+    // 渲染车型列表
+    renderVehicleList();
+
+    // 更新按钮状态
+    checkWorkflowState();
+}
+
+/**
+ * 渲染车型列表
+ */
+function renderVehicleList() {
+    const tbody = document.getElementById('vehicleListBody');
+    if (!tbody) return;
+
+    tbody.innerHTML = '';
+
+    const vehicles = Object.values(state.vehicleConfig).sort((a, b) => {
+        // 排序：历史 > 去库存 > 新增
+        const typeOrder = { historical: 1, clearStock: 2, new: 3 };
+        if (typeOrder[a.type] !== typeOrder[b.type]) {
+            return typeOrder[a.type] - typeOrder[b.type];
+        }
+        return a.code.localeCompare(b.code);
+    });
+
+    vehicles.forEach(vehicle => {
+        const tr = document.createElement('tr');
+        if (!vehicle.enabled) {
+            tr.classList.add('disabled');
+        } else if (vehicle.type === 'clearStock') {
+            tr.classList.add('clear-stock');
+        } else if (vehicle.type === 'new') {
+            tr.classList.add('new-vehicle');
+        }
+
+        // 车型代码
+        const tdCode = document.createElement('td');
+        tdCode.textContent = vehicle.code;
+        tr.appendChild(tdCode);
+
+        // 车型名称
+        const tdName = document.createElement('td');
+        tdName.textContent = vehicle.name;
+        tr.appendChild(tdName);
+
+        // 类型
+        const tdType = document.createElement('td');
+        const typeBadge = document.createElement('span');
+        typeBadge.className = `vehicle-type-badge ${vehicle.type}`;
+        if (vehicle.type === 'historical') {
+            typeBadge.textContent = '历史车型';
+        } else if (vehicle.type === 'clearStock') {
+            typeBadge.textContent = '📉 去库存';
+        } else if (vehicle.type === 'new') {
+            typeBadge.textContent = '🆕 新增';
+        }
+        tdType.appendChild(typeBadge);
+        tr.appendChild(tdType);
+
+        // 配置
+        const tdConfig = document.createElement('td');
+        if (vehicle.type === 'clearStock') {
+            tdConfig.textContent = `${vehicle.clearStock.startDate} → ${vehicle.clearStock.endDate}`;
+            tdConfig.style.fontSize = '12px';
+            tdConfig.style.color = '#F57C00';
+        } else if (vehicle.type === 'new') {
+            const templateName = vehicleRhythmTemplates[vehicle.newVehicle.template]?.name || vehicle.newVehicle.template;
+            tdConfig.textContent = `${templateName} | ${vehicle.newVehicle.launchDate}`;
+            tdConfig.style.fontSize = '12px';
+            tdConfig.style.color = '#1976D2';
+        } else {
+            tdConfig.textContent = '-';
+            tdConfig.style.color = '#999';
+        }
+        tr.appendChild(tdConfig);
+
+        // 操作
+        const tdActions = document.createElement('td');
+        tdActions.style.display = 'flex';
+        tdActions.style.gap = '8px';
+
+        // 启用/停用按钮
+        const toggleBtn = document.createElement('button');
+        toggleBtn.className = 'btn btn-secondary';
+        toggleBtn.textContent = vehicle.enabled ? '停用' : '启用';
+        toggleBtn.style.fontSize = '12px';
+        toggleBtn.style.padding = '4px 12px';
+        toggleBtn.onclick = () => toggleVehicleEnabled(vehicle.code);
+        tdActions.appendChild(toggleBtn);
+
+        // 历史车型显示"标记去库存"按钮
+        if (vehicle.type === 'historical' && vehicle.enabled) {
+            const clearStockBtn = document.createElement('button');
+            clearStockBtn.className = 'btn btn-secondary';
+            clearStockBtn.textContent = '标记去库存';
+            clearStockBtn.style.fontSize = '12px';
+            clearStockBtn.style.padding = '4px 12px';
+            clearStockBtn.onclick = () => markVehicleAsClearStock(vehicle.code);
+            tdActions.appendChild(clearStockBtn);
+        }
+
+        // 去库存车型显示"取消标记"按钮
+        if (vehicle.type === 'clearStock' && vehicle.enabled) {
+            const unmarkBtn = document.createElement('button');
+            unmarkBtn.className = 'btn btn-secondary';
+            unmarkBtn.textContent = '取消标记';
+            unmarkBtn.style.fontSize = '12px';
+            unmarkBtn.style.padding = '4px 12px';
+            unmarkBtn.onclick = () => unmarkClearStock(vehicle.code);
+            tdActions.appendChild(unmarkBtn);
+        }
+
+        tr.appendChild(tdActions);
+        tbody.appendChild(tr);
+    });
+}
+
+/**
+ * 切换车型启用/停用状态
+ */
+function toggleVehicleEnabled(vehicleCode) {
+    const vehicle = state.vehicleConfig[vehicleCode];
+    if (!vehicle) return;
+
+    vehicle.enabled = !vehicle.enabled;
+
+    // 更新计数
+    state.enabledVehicleCount = Object.values(state.vehicleConfig).filter(v => v.enabled).length;
+
+    // 重新渲染
+    renderVehicleList();
+    checkWorkflowState();
+}
+
+/**
+ * 标记车型为去库存
+ */
+function markVehicleAsClearStock(vehicleCode) {
+    const vehicle = state.vehicleConfig[vehicleCode];
+    if (!vehicle || vehicle.type !== 'historical') return;
+
+    // 显示模态框
+    const modalHtml = `
+        <div class="modal-overlay" id="clearStockModal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>标记去库存</h3>
+                </div>
+                <div class="modal-body">
+                    <p style="margin-bottom: 16px; color: #666;">
+                        车型：<strong>${vehicle.code} ${vehicle.name}</strong>
+                    </p>
+                    <div class="modal-form-group">
+                        <label>清库开始日期</label>
+                        <input type="date" id="clearStartDate" required>
+                    </div>
+                    <div class="modal-form-group">
+                        <label>清零日期</label>
+                        <input type="date" id="clearEndDate" required>
+                    </div>
+                    <p style="font-size: 13px; color: #999; margin-top: 12px;">
+                        💡 在此期间，商机量将线性衰减到0
+                    </p>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" onclick="document.getElementById('clearStockModal').remove()">取消</button>
+                    <button class="btn btn-primary" onclick="confirmClearStock('${vehicleCode}')">确认</button>
+                </div>
+            </div>
+        </div>
+    `;
+
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+}
+
+/**
+ * 确认去库存设置
+ */
+function confirmClearStock(vehicleCode) {
+    const startDate = document.getElementById('clearStartDate').value;
+    const endDate = document.getElementById('clearEndDate').value;
+
+    if (!startDate || !endDate) {
+        alert('请填写完整日期');
+        return;
+    }
+
+    if (new Date(startDate) >= new Date(endDate)) {
+        alert('清零日期必须晚于开始日期');
+        return;
+    }
+
+    const vehicle = state.vehicleConfig[vehicleCode];
+    vehicle.type = 'clearStock';
+    vehicle.clearStock.startDate = startDate;
+    vehicle.clearStock.endDate = endDate;
+
+    // 关闭模态框
+    document.getElementById('clearStockModal').remove();
+
+    // 重新渲染
+    renderVehicleList();
+}
+
+/**
+ * 取消去库存标记
+ */
+function unmarkClearStock(vehicleCode) {
+    const vehicle = state.vehicleConfig[vehicleCode];
+    if (!vehicle) return;
+
+    vehicle.type = 'historical';
+    vehicle.clearStock.startDate = null;
+    vehicle.clearStock.endDate = null;
+
+    renderVehicleList();
+}
+
+/**
+ * 添加新车型
+ */
+function addNewVehicle() {
+    // 显示模态框
+    const modalHtml = `
+        <div class="modal-overlay" id="addVehicleModal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>添加新车型</h3>
+                </div>
+                <div class="modal-body">
+                    <div class="modal-form-group">
+                        <label>车型代码（必填）</label>
+                        <input type="text" id="newVehicleCode" placeholder="如：W03" required>
+                    </div>
+                    <div class="modal-form-group">
+                        <label>车型名称（可选）</label>
+                        <input type="text" id="newVehicleName" placeholder="如：理想L6">
+                    </div>
+                    <div class="modal-form-group">
+                        <label>节奏模板</label>
+                        <div class="modal-template-options">
+                            <label class="modal-template-option">
+                                <input type="radio" name="vehicleTemplate" value="average" checked>
+                                <div class="modal-template-label">
+                                    <strong>📊 平均模板（推荐）</strong>
+                                    <span>适用于大部分新车型</span>
+                                </div>
+                            </label>
+                            <label class="modal-template-option">
+                                <input type="radio" name="vehicleTemplate" value="i8">
+                                <div class="modal-template-label">
+                                    <strong>🔥 i8模板（热度持久）</strong>
+                                    <span>适用于重磅主力车型</span>
+                                </div>
+                            </label>
+                            <label class="modal-template-option">
+                                <input type="radio" name="vehicleTemplate" value="mega">
+                                <div class="modal-template-label">
+                                    <strong>⚡ MEGA模板（快速回落）</strong>
+                                    <span>适用于小众/改款车型</span>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="modal-form-group">
+                        <label>发布日期（必填）</label>
+                        <input type="date" id="newVehicleLaunchDate" required>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" onclick="document.getElementById('addVehicleModal').remove()">取消</button>
+                    <button class="btn btn-primary" onclick="confirmAddVehicle()">确认添加</button>
+                </div>
+            </div>
+        </div>
+    `;
+
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+}
+
+/**
+ * 确认添加新车型
+ */
+function confirmAddVehicle() {
+    const code = document.getElementById('newVehicleCode').value.trim();
+    const name = document.getElementById('newVehicleName').value.trim() || code;
+    const template = document.querySelector('input[name="vehicleTemplate"]:checked').value;
+    const launchDate = document.getElementById('newVehicleLaunchDate').value;
+
+    if (!code) {
+        alert('请输入车型代码');
+        return;
+    }
+
+    if (state.vehicleConfig[code]) {
+        alert('车型代码已存在');
+        return;
+    }
+
+    if (!launchDate) {
+        alert('请选择发布日期');
+        return;
+    }
+
+    // 添加到配置
+    state.vehicleConfig[code] = {
+        code,
+        name,
+        type: 'new',
+        enabled: true,
+        clearStock: {
+            startDate: null,
+            endDate: null
+        },
+        newVehicle: {
+            template,
+            launchDate
+        }
+    };
+
+    state.enabledVehicleCount++;
+
+    // 关闭模态框
+    document.getElementById('addVehicleModal').remove();
+
+    // 重新渲染
+    renderVehicleList();
+    checkWorkflowState();
+}
+
+/**
+ * 确认车型配置
+ */
+function confirmVehicleConfig() {
+    if (state.enabledVehicleCount === 0) {
+        alert('请至少启用一个车型');
+        return;
+    }
+
+    state.workflow.vehiclesConfigured = true;
+
+    // 隐藏车型管理区域
+    const vehicleManagementSection = document.getElementById('vehicleManagementSection');
+    if (vehicleManagementSection) {
+        vehicleManagementSection.classList.add('hidden');
+    }
+
+    // 显示成功提示
+    const feedback = document.getElementById('vehicleConfigFeedback');
+    if (feedback) {
+        feedback.textContent = `✓ 车型配置已确认（${state.enabledVehicleCount}个车型）`;
+        feedback.style.color = '#2E7D32';
+        feedback.style.fontWeight = '600';
+    }
+
+    // 解锁步骤3
+    checkWorkflowState();
+
+    console.log('车型配置已确认:', state.vehicleConfig);
+}
+
 // ============== 月份选择 ==============
 function initializeMonthSelector() {
     const yearSelect = document.getElementById('yearSelect');
@@ -1094,8 +1624,15 @@ function updateTargetMonth() {
     state.targetYear = Number(document.getElementById('yearSelect').value);
     state.targetMonth = Number(document.getElementById('monthSelect').value);
 
+    // 更新workflow状态
+    state.workflow.monthSelected = true;
+
     updateCalendarView();
-    checkCanGenerate();
+
+    // 不再调用checkCanGenerate，由workflow统一管理
+    checkWorkflowState();
+
+    console.log('步骤3完成：月份已选择', state.targetYear, state.targetMonth);
 }
 
 function updateCalendarView() {
@@ -1217,6 +1754,21 @@ function getEventTypeLabel(type) {
     return labels[type] || type;
 }
 
+// ============== 车型管理初始化 ==============
+function initializeVehicleManagement() {
+    // 添加新车型按钮
+    const addNewVehicleBtn = document.getElementById('addNewVehicleBtn');
+    if (addNewVehicleBtn) {
+        addNewVehicleBtn.addEventListener('click', addNewVehicle);
+    }
+
+    // 确认车型配置按钮
+    const confirmVehicleConfigBtn = document.getElementById('confirmVehicleConfigBtn');
+    if (confirmVehicleConfigBtn) {
+        confirmVehicleConfigBtn.addEventListener('click', confirmVehicleConfig);
+    }
+}
+
 // ============== 生成按钮 ==============
 function initializeGenerateButton() {
     const generateBtn = document.getElementById('generateBtn');
@@ -1237,61 +1789,167 @@ function generateDailyRatios() {
     setTimeout(() => {
         try {
             const results = {};
-            const vehicles = getUniqueVehicles();
 
-            // ★ 优化：分两阶段处理——先识别数据充足和不足的车型
-            const vehiclesWithSufficientData = [];
-            const vehiclesWithInsufficientData = [];
+            // 获取所有启用的车型
+            const enabledVehicles = Object.values(state.vehicleConfig).filter(v => v.enabled);
 
-            vehicles.forEach(vehicle => {
-                const samePeriodDays = countSamePeriodDays(vehicle);
-                if (samePeriodDays >= 15) {
-                    vehiclesWithSufficientData.push(vehicle);
-                } else {
-                    vehiclesWithInsufficientData.push(vehicle);
-                    console.log(`⚠️ 车型 "${vehicle}" 同期数据仅 ${samePeriodDays} 天，将使用其他车型平均比例`);
-                }
-            });
-
-            // 第一步：计算数据充足车型的比例
-            vehiclesWithSufficientData.forEach(vehicle => {
-                results[vehicle] = calculateVehicleDailyRatios(vehicle);
-            });
-
-            // 第二步：计算其他车型的平均比例（如果有数据充足的车型）
-            if (vehiclesWithInsufficientData.length > 0) {
-                if (vehiclesWithSufficientData.length > 0) {
-                    // 计算充足车型的平均比例
-                    const averageRatios = calculateAverageRatios(results, vehiclesWithSufficientData);
-
-                    // 对数据不足的车型使用平均比例
-                    vehiclesWithInsufficientData.forEach(vehicle => {
-                        results[vehicle] = averageRatios;
-                        console.log(`✓ 车型 "${vehicle}" 已采用其他 ${vehiclesWithSufficientData.length} 个车型的平均比例`);
-                    });
-
-                    // 保存使用平均比例的车型列表
-                    state.vehiclesUsingAverageRatio = vehiclesWithInsufficientData;
-                } else {
-                    // 所有车型数据都不足，按原逻辑处理
-                    vehiclesWithInsufficientData.forEach(vehicle => {
-                        results[vehicle] = calculateVehicleDailyRatios(vehicle);
-                    });
-                    state.vehiclesUsingAverageRatio = [];
-                }
-            } else {
-                state.vehiclesUsingAverageRatio = [];
+            if (enabledVehicles.length === 0) {
+                throw new Error('没有启用的车型');
             }
 
+            console.log('开始生成比例，启用车型数:', enabledVehicles.length);
+
+            // ========== 第一步：处理历史车型 ==========
+            const historicalVehicles = enabledVehicles.filter(v => v.type === 'historical');
+            const historicalWithSufficientData = [];
+            const historicalWithInsufficientData = [];
+
+            historicalVehicles.forEach(vehicle => {
+                const samePeriodDays = countSamePeriodDays(vehicle.code);
+                if (samePeriodDays >= 15) {
+                    historicalWithSufficientData.push(vehicle);
+                    results[vehicle.code] = calculateVehicleDailyRatios(vehicle.code);
+                    console.log(`✓ 历史车型 "${vehicle.code}" 使用历史算法`);
+                } else {
+                    historicalWithInsufficientData.push(vehicle);
+                    console.log(`⚠️ 历史车型 "${vehicle.code}" 数据不足 (${samePeriodDays}天)`);
+                }
+            });
+
+            // 如果有数据不足的历史车型，使用充足车型的平均比例
+            if (historicalWithInsufficientData.length > 0 && historicalWithSufficientData.length > 0) {
+                const averageRatios = calculateAverageRatios(results, historicalWithSufficientData.map(v => v.code));
+                historicalWithInsufficientData.forEach(vehicle => {
+                    results[vehicle.code] = averageRatios;
+                    console.log(`✓ 历史车型 "${vehicle.code}" 使用平均比例`);
+                });
+            } else if (historicalWithInsufficientData.length > 0 && historicalWithSufficientData.length === 0) {
+                // 所有历史车型数据都不足，按原逻辑计算
+                historicalWithInsufficientData.forEach(vehicle => {
+                    results[vehicle.code] = calculateVehicleDailyRatios(vehicle.code);
+                });
+            }
+
+            // ========== 第二步：处理新增车型（应用模板）==========
+            const newVehicles = enabledVehicles.filter(v => v.type === 'new');
+            newVehicles.forEach(vehicle => {
+                const template = vehicle.newVehicle.template;
+                const launchDate = vehicle.newVehicle.launchDate;
+
+                // 应用模板生成每日权重
+                const dailyWeights = applyVehicleTemplate(
+                    template,
+                    launchDate,
+                    state.targetYear,
+                    state.targetMonth
+                );
+
+                if (!dailyWeights) {
+                    console.error(`新增车型 "${vehicle.code}" 模板应用失败`);
+                    results[vehicle.code] = generateDefaultRatios();
+                    return;
+                }
+
+                // 将权重转换为比例格式
+                results[vehicle.code] = convertWeightsToRatios(dailyWeights, vehicle.code);
+                console.log(`✓ 新增车型 "${vehicle.code}" 应用模板: ${template}`);
+            });
+
+            // ========== 第三步：处理去库存车型（历史 × 衰减）==========
+            const clearStockVehicles = enabledVehicles.filter(v => v.type === 'clearStock');
+            clearStockVehicles.forEach(vehicle => {
+                // 先获取历史比例
+                let historicalRatios;
+                const samePeriodDays = countSamePeriodDays(vehicle.code);
+
+                if (samePeriodDays >= 15) {
+                    historicalRatios = calculateVehicleDailyRatios(vehicle.code);
+                } else if (historicalWithSufficientData.length > 0) {
+                    historicalRatios = calculateAverageRatios(results, historicalWithSufficientData.map(v => v.code));
+                } else {
+                    historicalRatios = calculateVehicleDailyRatios(vehicle.code);
+                }
+
+                // 生成衰减权重
+                const clearStartDate = vehicle.clearStock.startDate;
+                const clearEndDate = vehicle.clearStock.endDate;
+                const decayWeights = generateClearStockWeights(
+                    clearStartDate,
+                    clearEndDate,
+                    state.targetYear,
+                    state.targetMonth
+                );
+
+                // 应用衰减：历史 × 衰减
+                results[vehicle.code] = historicalRatios.map((dayData, index) => ({
+                    ...dayData,
+                    weight: dayData.weight * decayWeights[index],
+                    ratio: dayData.ratio * decayWeights[index]
+                }));
+
+                // 重新归一化
+                const totalRatio = results[vehicle.code].reduce((sum, d) => sum + d.ratio, 0);
+                if (totalRatio > 0) {
+                    results[vehicle.code].forEach(d => {
+                        d.ratio = (d.ratio / totalRatio) * 100;
+                    });
+                }
+
+                console.log(`✓ 去库存车型 "${vehicle.code}" 应用衰减`);
+            });
+
             state.results = results;
+            state.workflow.ratiosGenerated = true;
+
             displayResults();
             loading.classList.add('hidden');
+            checkWorkflowState();
+
+            console.log('比例生成完成');
 
         } catch (error) {
             alert('生成失败：' + error.message);
             loading.classList.add('hidden');
         }
     }, 500);
+}
+
+/**
+ * 将权重数组转换为比例格式（新增车型专用）
+ */
+function convertWeightsToRatios(dailyWeights, vehicleCode) {
+    const daysInMonth = dailyWeights.length;
+    const ratios = [];
+
+    // 先创建基础结构
+    for (let day = 1; day <= daysInMonth; day++) {
+        const date = new Date(state.targetYear, state.targetMonth - 1, day);
+        const dayOfWeek = ['日', '一', '二', '三', '四', '五', '六'][date.getDay()];
+        const holiday = getHoliday(date);
+
+        ratios.push({
+            day: day,
+            dayOfWeek: dayOfWeek,
+            holiday: holiday,
+            weight: dailyWeights[day - 1],
+            ratio: 0  // 稍后计算
+        });
+    }
+
+    // 计算比例
+    const totalWeight = ratios.reduce((sum, d) => sum + d.weight, 0);
+    if (totalWeight > 0) {
+        ratios.forEach(d => {
+            d.ratio = (d.weight / totalWeight) * 100;
+        });
+    } else {
+        // 如果权重全为0，平均分配
+        ratios.forEach(d => {
+            d.ratio = 100 / daysInMonth;
+        });
+    }
+
+    return ratios;
 }
 
 function getUniqueVehicles() {
@@ -1807,16 +2465,24 @@ function displayResults() {
     resultsSection.classList.remove('hidden');
 
     const vehicles = Object.keys(state.results);
-    state.currentVehicle = vehicles[0];
+
+    // 默认显示历史车型汇总（如果有历史车型）
+    const historicalCount = vehicles.filter(code => {
+        const config = state.vehicleConfig[code];
+        return config && config.enabled && (config.type === 'historical' || config.type === 'clearStock');
+    }).length;
+
+    if (historicalCount >= 1) {
+        state.currentVehicle = '__HISTORICAL_SUMMARY__';
+    } else {
+        state.currentVehicle = vehicles[0];
+    }
 
     renderVehicleTabs(vehicles);
-    renderResultsTable(state.currentVehicle);
-    renderSummary(state.currentVehicle);
-    displayHistoryData(state.currentVehicle);
-    updateTargetInput(state.currentVehicle);
+    switchVehicle(state.currentVehicle);  // 使用switchVehicle统一处理
 
-    // ★ 显示使用平均比例的车型提示
-    displayAverageRatioNotification();
+    // ★ 显示使用平均比例的车型提示（如果需要的话可以移除）
+    // displayAverageRatioNotification();
 
     // 滚动到结果区域
     resultsSection.scrollIntoView({ behavior: 'smooth' });
@@ -1870,27 +2536,231 @@ function displayAverageRatioNotification() {
 
 function renderVehicleTabs(vehicles) {
     const vehicleTabs = document.getElementById('vehicleTabs');
-    vehicleTabs.innerHTML = vehicles.map(vehicle => {
-        const isUsingAverage = state.vehiclesUsingAverageRatio && state.vehiclesUsingAverageRatio.includes(vehicle);
-        const badge = isUsingAverage ? '<span style="margin-left: 6px; font-size: 12px;" title="使用平均比例">📊</span>' : '';
+    const tabs = [];
 
-        return `
-            <div class="vehicle-tab ${vehicle === state.currentVehicle ? 'active' : ''}"
+    // 分类车型
+    const historicalVehicles = [];
+    const newVehicles = [];
+    const clearStockVehicles = [];
+
+    vehicles.forEach(vehicleCode => {
+        const config = state.vehicleConfig[vehicleCode];
+        if (!config || !config.enabled) return;
+
+        if (config.type === 'historical') {
+            historicalVehicles.push(vehicleCode);
+        } else if (config.type === 'clearStock') {
+            clearStockVehicles.push(vehicleCode);
+        } else if (config.type === 'new') {
+            newVehicles.push(vehicleCode);
+        }
+    });
+
+    // 1. 历史车型汇总（如果有多个历史车型+去库存车型）
+    const totalHistoricalCount = historicalVehicles.length + clearStockVehicles.length;
+    if (totalHistoricalCount >= 1) {
+        const isActive = state.currentVehicle === '__HISTORICAL_SUMMARY__';
+        tabs.push(`
+            <div class="vehicle-tab ${isActive ? 'active' : ''}"
+                 data-vehicle="__HISTORICAL_SUMMARY__"
+                 onclick="switchVehicle('__HISTORICAL_SUMMARY__')"
+                 style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-weight: 600;">
+                📊 历史车型汇总
+            </div>
+        `);
+    }
+
+    // 2. 各历史车型
+    historicalVehicles.forEach(vehicle => {
+        const isActive = vehicle === state.currentVehicle;
+        tabs.push(`
+            <div class="vehicle-tab ${isActive ? 'active' : ''}"
                  data-vehicle="${vehicle}"
                  onclick="switchVehicle('${vehicle}')">
-                ${vehicle}${badge}
+                ${vehicle}
             </div>
-        `;
-    }).join('');
+        `);
+    });
+
+    // 3. 去库存车型
+    clearStockVehicles.forEach(vehicle => {
+        const isActive = vehicle === state.currentVehicle;
+        const config = state.vehicleConfig[vehicle];
+        tabs.push(`
+            <div class="vehicle-tab ${isActive ? 'active' : ''}"
+                 data-vehicle="${vehicle}"
+                 onclick="switchVehicle('${vehicle}')"
+                 style="background: #FFF3E0; border-color: #FFE0B2;">
+                📉 ${vehicle}
+            </div>
+        `);
+    });
+
+    // 4. 新增车型
+    newVehicles.forEach(vehicle => {
+        const isActive = vehicle === state.currentVehicle;
+        const config = state.vehicleConfig[vehicle];
+        tabs.push(`
+            <div class="vehicle-tab ${isActive ? 'active' : ''}"
+                 data-vehicle="${vehicle}"
+                 onclick="switchVehicle('${vehicle}')"
+                 style="background: #E3F2FD; border-color: #BBDEFB;">
+                🆕 ${vehicle}
+            </div>
+        `);
+    });
+
+    // 5. 总览
+    const isTotalActive = state.currentVehicle === '__TOTAL_SUMMARY__';
+    tabs.push(`
+        <div class="vehicle-tab ${isTotalActive ? 'active' : ''}"
+             data-vehicle="__TOTAL_SUMMARY__"
+             onclick="switchVehicle('__TOTAL_SUMMARY__')"
+             style="background: #F5F5F5; border-color: #E0E0E0; color: #666;">
+            📈 总览
+        </div>
+    `);
+
+    vehicleTabs.innerHTML = tabs.join('');
 }
 
 function switchVehicle(vehicle) {
     state.currentVehicle = vehicle;
     renderVehicleTabs(Object.keys(state.results));
-    renderResultsTable(vehicle);
-    renderSummary(vehicle);
-    displayHistoryData(vehicle);
-    updateTargetInput(vehicle);
+
+    // 根据不同类型的视图渲染不同的内容
+    if (vehicle === '__HISTORICAL_SUMMARY__') {
+        renderHistoricalSummaryView();
+    } else if (vehicle === '__TOTAL_SUMMARY__') {
+        renderTotalSummaryView();
+    } else {
+        renderResultsTable(vehicle);
+        renderSummary(vehicle);
+        displayHistoryData(vehicle);
+        updateTargetInput(vehicle);
+    }
+
+    // 更新图表
+    if (window.updateChartForVehicle) {
+        window.updateChartForVehicle(vehicle);
+    }
+}
+
+/**
+ * 渲染历史车型汇总视图
+ */
+function renderHistoricalSummaryView() {
+    // 获取所有历史车型（包括去库存）
+    const historicalVehicles = Object.keys(state.results).filter(code => {
+        const config = state.vehicleConfig[code];
+        return config && config.enabled && (config.type === 'historical' || config.type === 'clearStock');
+    });
+
+    if (historicalVehicles.length === 0) {
+        alert('没有历史车型数据');
+        return;
+    }
+
+    // 计算汇总
+    const daysInMonth = state.results[historicalVehicles[0]].length;
+    const summaryData = [];
+
+    for (let dayIndex = 0; dayIndex < daysInMonth; dayIndex++) {
+        const firstDayData = state.results[historicalVehicles[0]][dayIndex];
+        let totalWeight = 0;
+        let totalRatio = 0;
+
+        historicalVehicles.forEach(vehicle => {
+            totalWeight += state.results[vehicle][dayIndex].weight || 0;
+            totalRatio += state.results[vehicle][dayIndex].ratio || 0;
+        });
+
+        summaryData.push({
+            ...firstDayData,
+            weight: totalWeight / historicalVehicles.length,
+            ratio: totalRatio / historicalVehicles.length
+        });
+    }
+
+    // 归一化
+    const totalRatioSum = summaryData.reduce((sum, d) => sum + d.ratio, 0);
+    if (totalRatioSum > 0) {
+        summaryData.forEach(d => {
+            d.ratio = (d.ratio / totalRatioSum) * 100;
+        });
+    }
+
+    // 使用汇总数据渲染表格
+    state.results['__HISTORICAL_SUMMARY__'] = summaryData;
+    renderResultsTable('__HISTORICAL_SUMMARY__');
+    renderSummary('__HISTORICAL_SUMMARY__');
+
+    // 隐藏去年同期面板
+    const historyPanel = document.getElementById('historyPanel');
+    if (historyPanel) {
+        historyPanel.style.display = 'none';
+    }
+
+    updateTargetInput('__HISTORICAL_SUMMARY__');
+}
+
+/**
+ * 渲染总览视图
+ */
+function renderTotalSummaryView() {
+    const allVehicles = Object.keys(state.results).filter(code => {
+        return code !== '__HISTORICAL_SUMMARY__' && code !== '__TOTAL_SUMMARY__';
+    }).filter(code => {
+        const config = state.vehicleConfig[code];
+        return config && config.enabled;
+    });
+
+    if (allVehicles.length === 0) {
+        alert('没有车型数据');
+        return;
+    }
+
+    // 计算总和
+    const daysInMonth = state.results[allVehicles[0]].length;
+    const totalData = [];
+
+    for (let dayIndex = 0; dayIndex < daysInMonth; dayIndex++) {
+        const firstDayData = state.results[allVehicles[0]][dayIndex];
+        let totalWeight = 0;
+        let totalRatio = 0;
+
+        allVehicles.forEach(vehicle => {
+            totalWeight += state.results[vehicle][dayIndex].weight || 0;
+            totalRatio += state.results[vehicle][dayIndex].ratio || 0;
+        });
+
+        totalData.push({
+            ...firstDayData,
+            weight: totalWeight,
+            ratio: totalRatio
+        });
+    }
+
+    // 归一化
+    const totalRatioSum = totalData.reduce((sum, d) => sum + d.ratio, 0);
+    if (totalRatioSum > 0) {
+        totalData.forEach(d => {
+            d.ratio = (d.ratio / totalRatioSum) * 100;
+        });
+    }
+
+    // 使用总览数据渲染表格
+    state.results['__TOTAL_SUMMARY__'] = totalData;
+    renderResultsTable('__TOTAL_SUMMARY__');
+    renderSummary('__TOTAL_SUMMARY__');
+
+    // 隐藏去年同期面板
+    const historyPanel = document.getElementById('historyPanel');
+    if (historyPanel) {
+        historyPanel.style.display = 'none';
+    }
+
+    updateTargetInput('__TOTAL_SUMMARY__');
 }
 
 function renderResultsTable(vehicle) {
@@ -2410,12 +3280,20 @@ function handleRegionChange() {
 
     if (selectedRegion) {
         state.selectedRegion = selectedRegion;
-        regionFeedback.textContent = `已选择：${selectedRegion}（包含 ${regionsData[selectedRegion].stores.length} 个门店）`;
+        state.workflow.regionSelected = true;  // 更新workflow状态
+        regionFeedback.textContent = `✓ 已选择：${selectedRegion}（包含 ${regionsData[selectedRegion].stores.length} 个门店）`;
         regionFeedback.style.color = '#28a745';
         regionFeedback.style.fontWeight = '600';
+
+        // 检查按钮状态
+        checkWorkflowState();
+
+        console.log('步骤1完成：区域已选择');
     } else {
         state.selectedRegion = null;
+        state.workflow.regionSelected = false;
         regionFeedback.textContent = '';
+        checkWorkflowState();
     }
 }
 
@@ -2483,3 +3361,9 @@ function checkAndShowStoreAllocation() {
         storeAllocationSection.classList.add('hidden');
     }
 }
+
+
+// ============== 全局函数导出（供HTML onclick调用）==============
+window.switchVehicle = switchVehicle;
+window.confirmClearStock = confirmClearStock;
+window.confirmAddVehicle = confirmAddVehicle;
