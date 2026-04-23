@@ -99,11 +99,8 @@ function initializeChart() {
             // 重新添加汇总标签（因为renderVehicleTabs会清空所有标签）
             addSummaryTab();
 
-            // 隐藏图表
-            const chartArea = document.getElementById('chartAdjustmentArea');
-            if (chartArea) {
-                chartArea.style.display = 'none';
-            }
+            // 不再隐藏图表区域，由updateChartForVehicle统一管理
+            // 图表区域的显示/隐藏现在由app.js的updateChartForVehicle函数控制
 
             // 确保结果表格区域可见
             const comparisonLayout = document.querySelector('.comparison-layout');
