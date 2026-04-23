@@ -1926,11 +1926,17 @@ function convertWeightsToRatios(dailyWeights, vehicleCode) {
         const date = new Date(state.targetYear, state.targetMonth - 1, day);
         const dayOfWeek = ['日', '一', '二', '三', '四', '五', '六'][date.getDay()];
         const holiday = getHoliday(date);
+        const isWeekend = date.getDay() === 0 || date.getDay() === 6;
+
+        // 格式化日期字符串
+        const dateStr = `${state.targetYear}-${String(state.targetMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 
         ratios.push({
             day: day,
+            date: dateStr,  // 添加完整的日期字符串
             dayOfWeek: dayOfWeek,
             holiday: holiday,
+            isWeekend: isWeekend,  // 添加周末标识
             weight: dailyWeights[day - 1],
             ratio: 0  // 稍后计算
         });
@@ -2947,9 +2953,25 @@ function renderSummary(vehicle) {
 
 // ============== 去年同期参考 ==============
 function displayHistoryData(vehicle) {
+    const historyPanel = document.getElementById('historyPanel');
     const historyBody = document.getElementById('historyBody');
     const historyNote = document.getElementById('historyNote');
     const historySummary = document.getElementById('historySummary');
+
+    // 对于新增车型，直接隐藏历史面板
+    const vehicleConfig = state.vehicleConfig[vehicle];
+    if (vehicleConfig && vehicleConfig.type === 'new') {
+        if (historyPanel) {
+            historyPanel.style.display = 'none';
+        }
+        console.log('新增车型无历史数据，隐藏历史面板');
+        return;
+    }
+
+    // 显示历史面板（对于历史车型和去库存车型）
+    if (historyPanel) {
+        historyPanel.style.display = 'block';
+    }
 
     const lastYear = state.targetYear - 1;
     const targetMonth = state.targetMonth;
