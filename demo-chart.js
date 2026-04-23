@@ -657,8 +657,9 @@ function bindDragEvents(canvas) {
                 updateAdjustmentStats();
                 updateSummaryTargetInput();
             } else {
-                // 单个车型：重新归一化并更新表格
+                // 单个车型：重新归一化并更新汇总
                 normalizeVehicleRatios(currentView);
+                recalculateSummaryFromVehicles(); // 实时更新汇总
                 if (window.renderResultsTable) {
                     window.renderResultsTable(currentView);
                 }
@@ -684,12 +685,18 @@ function bindDragEvents(canvas) {
                 // 单个车型：重新归一化并更新
                 normalizeVehicleRatios(currentView);
                 chartInstance.update();
+
+                // 【新增】重新计算汇总数据，实现反向联动
+                recalculateSummaryFromVehicles();
+
                 if (window.renderResultsTable) {
                     window.renderResultsTable(currentView);
                 }
                 if (window.renderSummary) {
                     window.renderSummary(currentView);
                 }
+
+                console.log('[mouseup] 单车型调整完成，汇总已更新');
             }
 
             canvas.style.cursor = 'grab';
@@ -1379,4 +1386,91 @@ function normalizeVehicleRatios(vehicle) {
     }
 
     console.log('[normalizeVehicleRatios] 车型 ' + vehicle + ' 比例已归一化');
+}
+
+// ============== 从各车型重新计算汇总（单车型调整后调用）==============
+function recalculateSummaryFromVehicles() {
+    console.log('[recalculateSummaryFromVehicles] 开始重新计算汇总数据');
+
+    // 获取所有需要参与汇总的车型
+    const historicalVehicles = Object.keys(state.results).filter(code => {
+        if (code.startsWith('__')) return false;
+        const config = state.vehicleConfig[code];
+        return config && config.enabled && (config.type === 'historical' || config.type === 'clearStock');
+    });
+
+    const allVehicles = Object.keys(state.results).filter(code => {
+        if (code.startsWith('__')) return false;
+        const config = state.vehicleConfig[code];
+        return config && config.enabled;
+    });
+
+    if (historicalVehicles.length === 0 && allVehicles.length === 0) {
+        console.warn('[recalculateSummaryFromVehicles] 没有启用的车型');
+        return;
+    }
+
+    // 获取月份天数
+    const firstVehicle = allVehicles[0] || historicalVehicles[0];
+    if (!state.results[firstVehicle]) return;
+
+    const daysInMonth = state.results[firstVehicle].length;
+
+    // 重新计算每日汇总
+    for (let dayIndex = 0; dayIndex < daysInMonth; dayIndex++) {
+        // 计算历史车型汇总
+        let historicalDayTotal = 0;
+        historicalVehicles.forEach(vehicle => {
+            const dayRatio = state.results[vehicle][dayIndex].ratio;
+            const vehicleTarget = state.vehicleTargets[vehicle] || 0;
+
+            let amount = 0;
+            if (vehicleTarget > 0) {
+                // 有目标量，转换为实际数量
+                amount = (dayRatio / 100) * vehicleTarget;
+            } else {
+                // 无目标量，使用比例
+                amount = dayRatio;
+            }
+
+            historicalDayTotal += amount;
+        });
+
+        // 计算总览汇总
+        let totalDayTotal = 0;
+        allVehicles.forEach(vehicle => {
+            const dayRatio = state.results[vehicle][dayIndex].ratio;
+            const vehicleTarget = state.vehicleTargets[vehicle] || 0;
+
+            let amount = 0;
+            if (vehicleTarget > 0) {
+                amount = (dayRatio / 100) * vehicleTarget;
+            } else {
+                amount = dayRatio;
+            }
+
+            totalDayTotal += amount;
+        });
+
+        // 更新 chartData（用于汇总视图）
+        // 根据当前视图决定更新哪个汇总
+        if (chartData.adjustedAmounts && chartData.adjustedAmounts.length > dayIndex) {
+            chartData.adjustedAmounts[dayIndex] = historicalDayTotal;
+            chartData.originalAmounts[dayIndex] = historicalDayTotal;
+        }
+
+        // 同时更新车型分解数据
+        if (!chartData.vehicleBreakdown[dayIndex]) {
+            chartData.vehicleBreakdown[dayIndex] = {};
+        }
+
+        allVehicles.forEach(vehicle => {
+            const dayRatio = state.results[vehicle][dayIndex].ratio;
+            const vehicleTarget = state.vehicleTargets[vehicle] || 0;
+            let amount = vehicleTarget > 0 ? (dayRatio / 100) * vehicleTarget : dayRatio;
+            chartData.vehicleBreakdown[dayIndex][vehicle] = amount;
+        });
+    }
+
+    console.log('[recalculateSummaryFromVehicles] 汇总数据已更新');
 }
