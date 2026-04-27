@@ -348,7 +348,7 @@ function bindStoreAllocationButtons() {
 
         storeAllocationData.adjustments = {};
 
-        updateStoreAllocationChart();
+        renderStoreAllocationRows();
         updateStoreAllocationStats();
     };
 
@@ -902,8 +902,19 @@ function bindStoreChartDragEvents(canvas) {
     canvas.addEventListener('mouseleave', () => {
         if (isStoreChartDragging) {
             isStoreChartDragging = false;
+
+            // 保存调整到state（与mouseup一致）
+            const storeName = storeChartData.storeName;
+            state.storeData[storeName].adjustments = { ...storeChartData.adjustments };
+
+            // 重新计算该门店各车型的每日数据
+            recalculateStoreVehicleData(storeName);
+
             dragStoreDayIndex = null;
             canvas.style.cursor = 'default';
+
+            // 重新渲染表格
+            renderStoreDataTable(storeName);
         }
     });
 }
@@ -1241,6 +1252,10 @@ function recalculateStoreVehicleData(storeName) {
 
     // 更新每日总量
     storeData.dailyTotals = newDailyTotals;
+
+    // 同步更新 state.storeAllocations 的月度总量
+    const newMonthlyTotal = newDailyTotals.reduce((sum, val) => sum + val, 0);
+    state.storeAllocations[storeName] = newMonthlyTotal;
 
     // 更新区域车型汇总对比（手动调整后实时更新）
     renderRegionVehicleSummary();

@@ -1524,6 +1524,16 @@ function confirmAddVehicle() {
         return;
     }
 
+    // 校验发布日期是否在预测月份之后
+    if (state.targetYear && state.targetMonth) {
+        const forecastMonthEnd = new Date(state.targetYear, state.targetMonth, 0); // 预测月最后一天
+        const launch = new Date(launchDate);
+        if (launch > forecastMonthEnd) {
+            alert(`警告：发布日期（${launchDate}）晚于预测月份（${state.targetYear}年${state.targetMonth}月），生成的分布将为均匀分配，可能不符合预期。\n\n如需继续请重新选择发布日期，或确认该车型在预测月份内尚未发布。`);
+            return;
+        }
+    }
+
     // 添加到配置
     state.vehicleConfig[code] = {
         code,
@@ -1820,7 +1830,7 @@ function generateDailyRatios() {
             if (historicalWithInsufficientData.length > 0 && historicalWithSufficientData.length > 0) {
                 const averageRatios = calculateAverageRatios(results, historicalWithSufficientData.map(v => v.code));
                 historicalWithInsufficientData.forEach(vehicle => {
-                    results[vehicle.code] = averageRatios;
+                    results[vehicle.code] = averageRatios.map(d => ({...d}));
                     console.log(`✓ 历史车型 "${vehicle.code}" 使用平均比例`);
                 });
             } else if (historicalWithInsufficientData.length > 0 && historicalWithSufficientData.length === 0) {
@@ -2039,44 +2049,83 @@ function calculateAverageRatios(results, vehicles) {
 function autoRefreshResults() {
     if (!state.results) return;
 
-    const vehicles = getUniqueVehicles();
+    const enabledVehicles = Object.values(state.vehicleConfig).filter(v => v.enabled);
     const results = {};
 
-    // ★ 优化：同样使用两阶段处理
-    const vehiclesWithSufficientData = [];
-    const vehiclesWithInsufficientData = [];
+    // ========== 第一步：处理历史车型 ==========
+    const historicalVehicles = enabledVehicles.filter(v => v.type === 'historical');
+    const historicalWithSufficientData = [];
+    const historicalWithInsufficientData = [];
 
-    vehicles.forEach(vehicle => {
-        const samePeriodDays = countSamePeriodDays(vehicle);
+    historicalVehicles.forEach(vehicle => {
+        const samePeriodDays = countSamePeriodDays(vehicle.code);
         if (samePeriodDays >= 15) {
-            vehiclesWithSufficientData.push(vehicle);
+            historicalWithSufficientData.push(vehicle);
+            results[vehicle.code] = calculateVehicleDailyRatios(vehicle.code);
         } else {
-            vehiclesWithInsufficientData.push(vehicle);
+            historicalWithInsufficientData.push(vehicle);
         }
     });
 
-    // 计算数据充足车型的比例
-    vehiclesWithSufficientData.forEach(vehicle => {
-        results[vehicle] = calculateVehicleDailyRatios(vehicle);
-    });
-
-    // 对数据不足的车型使用平均比例
-    if (vehiclesWithInsufficientData.length > 0) {
-        if (vehiclesWithSufficientData.length > 0) {
-            const averageRatios = calculateAverageRatios(results, vehiclesWithSufficientData);
-            vehiclesWithInsufficientData.forEach(vehicle => {
-                results[vehicle] = averageRatios;
+    // 对数据不足的历史车型使用平均比例
+    if (historicalWithInsufficientData.length > 0) {
+        if (historicalWithSufficientData.length > 0) {
+            const averageRatios = calculateAverageRatios(results, historicalWithSufficientData.map(v => v.code));
+            historicalWithInsufficientData.forEach(vehicle => {
+                results[vehicle.code] = averageRatios.map(d => ({...d}));
             });
-            state.vehiclesUsingAverageRatio = vehiclesWithInsufficientData;
+            state.vehiclesUsingAverageRatio = historicalWithInsufficientData.map(v => v.code);
         } else {
-            vehiclesWithInsufficientData.forEach(vehicle => {
-                results[vehicle] = calculateVehicleDailyRatios(vehicle);
+            historicalWithInsufficientData.forEach(vehicle => {
+                results[vehicle.code] = calculateVehicleDailyRatios(vehicle.code);
             });
             state.vehiclesUsingAverageRatio = [];
         }
     } else {
         state.vehiclesUsingAverageRatio = [];
     }
+
+    // ========== 第二步：处理新增车型（应用模板）==========
+    const newVehicles = enabledVehicles.filter(v => v.type === 'new');
+    newVehicles.forEach(vehicle => {
+        const template = vehicle.newVehicle.template;
+        const launchDate = vehicle.newVehicle.launchDate;
+        const dailyWeights = applyVehicleTemplate(template, launchDate, state.targetYear, state.targetMonth);
+        if (!dailyWeights) {
+            results[vehicle.code] = generateDefaultRatios();
+            return;
+        }
+        results[vehicle.code] = convertWeightsToRatios(dailyWeights, vehicle.code);
+    });
+
+    // ========== 第三步：处理去库存车型（历史 × 衰减）==========
+    const clearStockVehicles = enabledVehicles.filter(v => v.type === 'clearStock');
+    clearStockVehicles.forEach(vehicle => {
+        let historicalRatios;
+        const samePeriodDays = countSamePeriodDays(vehicle.code);
+        if (samePeriodDays >= 15) {
+            historicalRatios = calculateVehicleDailyRatios(vehicle.code);
+        } else if (historicalWithSufficientData.length > 0) {
+            historicalRatios = calculateAverageRatios(results, historicalWithSufficientData.map(v => v.code));
+        } else {
+            historicalRatios = calculateVehicleDailyRatios(vehicle.code);
+        }
+        const decayWeights = generateClearStockWeights(
+            vehicle.clearStock.startDate, vehicle.clearStock.endDate,
+            state.targetYear, state.targetMonth
+        );
+        results[vehicle.code] = historicalRatios.map((dayData, index) => ({
+            ...dayData,
+            weight: dayData.weight * decayWeights[index],
+            ratio: dayData.ratio * decayWeights[index]
+        }));
+        const totalRatio = results[vehicle.code].reduce((sum, d) => sum + d.ratio, 0);
+        if (totalRatio > 0) {
+            results[vehicle.code].forEach(d => {
+                d.ratio = (d.ratio / totalRatio) * 100;
+            });
+        }
+    });
 
     state.results = results;
 
@@ -3141,8 +3190,8 @@ function exportToExcel() {
 
     const wb = XLSX.utils.book_new();
 
-    // 为每个车型创建一个工作表
-    Object.keys(state.results).forEach(vehicle => {
+    // 为每个车型创建一个工作表（排除伪车型）
+    Object.keys(state.results).filter(v => !v.startsWith('__')).forEach(vehicle => {
         const ratios = state.results[vehicle];
 
         // 优先使用调整后的数据，如果没有则使用原始拆分
@@ -3219,8 +3268,8 @@ function exportToExcelHorizontal() {
 
     const wb = XLSX.utils.book_new();
 
-    // 获取所有车型
-    const vehicles = Object.keys(state.results);
+    // 获取所有车型（排除伪车型）
+    const vehicles = Object.keys(state.results).filter(v => !v.startsWith('__'));
 
     // 获取目标月份的所有日期
     const daysInMonth = getDaysInMonth(state.targetYear, state.targetMonth);
@@ -3333,7 +3382,7 @@ function checkAndShowStoreAllocation() {
         return;
     }
 
-    const vehicles = Object.keys(state.results);
+    const vehicles = Object.keys(state.results).filter(v => !v.startsWith('__'));
     const allVehiclesHaveTargets = vehicles.every(vehicle => state.vehicleTargets[vehicle] > 0);
 
     console.log('vehicles:', vehicles);
@@ -3386,6 +3435,6 @@ function checkAndShowStoreAllocation() {
 
 
 // ============== 全局函数导出（供HTML onclick调用）==============
-window.switchVehicle = switchVehicle;
+// Note: window.switchVehicle 已在上方导出，demo-chart.js 会 hook 它
 window.confirmClearStock = confirmClearStock;
 window.confirmAddVehicle = confirmAddVehicle;

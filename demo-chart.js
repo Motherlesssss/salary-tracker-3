@@ -486,7 +486,7 @@ function createSummaryChart() {
                             // 判断是否有实质调整（系数不接近1）
                             if (multiplier !== undefined && Math.abs(multiplier - 1) > 0.001) {
                                 const change = value - original;
-                                const changePercent = ((change / original) * 100).toFixed(1);
+                                const changePercent = original !== 0 ? ((change / original) * 100).toFixed(1) : '∞';
                                 lines.push(`调整: ${change > 0 ? '+' : ''}${hasTarget ? Math.round(change) : change.toFixed(2) + '%'} (${changePercent > 0 ? '+' : ''}${changePercent}%)`);
                             }
 
@@ -613,7 +613,7 @@ function bindDragEvents(canvas) {
 
         let newValue = startValue + deltaValue;
 
-        // 限制范围
+        // 限制范围：下限为0
         newValue = Math.max(0, newValue);
 
         // 判断当前视图类型
@@ -621,6 +621,8 @@ function bindDragEvents(canvas) {
         const isIndividualVehicle = !currentView.startsWith('__');
 
         if (isIndividualVehicle) {
+            // 单个车型视图：限制上限为50%（避免极端拖拽导致其余天全部归零）
+            newValue = Math.min(newValue, 50);
             // 单个车型视图：直接更新该车型的比例
             const vehicleData = state.results[currentView];
             if (vehicleData && vehicleData[dragBarIndex]) {
@@ -629,6 +631,10 @@ function bindDragEvents(canvas) {
                 chartInstance.data.datasets[0].data[dragBarIndex] = newValue;
             }
         } else {
+            // 汇总视图：限制上限不超过月度目标量的30%（避免极端拖拽）
+            if (chartData.monthlyTarget > 0) {
+                newValue = Math.min(newValue, chartData.monthlyTarget * 0.3);
+            }
             // 汇总视图：更新adjustedAmounts
             chartData.adjustedAmounts[dragBarIndex] = newValue;
 
@@ -707,11 +713,30 @@ function bindDragEvents(canvas) {
     canvas.addEventListener('mouseleave', function() {
         if (isDragging) {
             isDragging = false;
-            redistributeToVehicles();
-            chartInstance.update();
-            renderSummaryTable();
-            updateAdjustmentStats();
-            updateSummaryTargetInput();
+
+            const currentView = state.currentVehicle;
+            const isIndividualVehicle = !currentView.startsWith('__');
+
+            if (!isIndividualVehicle) {
+                // 汇总视图：反向分配到各车型
+                redistributeToVehicles();
+                chartInstance.update();
+                renderSummaryTable();
+                updateAdjustmentStats();
+                updateSummaryTargetInput();
+            } else {
+                // 单个车型：重新归一化并更新汇总
+                normalizeVehicleRatios(currentView);
+                chartInstance.update();
+                recalculateSummaryFromVehicles();
+                if (window.renderResultsTable) {
+                    window.renderResultsTable(currentView);
+                }
+                if (window.renderSummary) {
+                    window.renderSummary(currentView);
+                }
+            }
+
             canvas.style.cursor = 'default';
             dragBarIndex = null;
         }
@@ -863,7 +888,7 @@ function redistributeToVehicles() {
                 if (index < extra) {
                     finalValue++;
                 }
-                chartData.adjustedVehicleData[vehicle][item.dayIndex] = finalValue;
+                chartData.adjustedVehicleData[vehicle][item.dayIndex] = Math.max(0, finalValue);
             });
         }
     });
@@ -907,10 +932,16 @@ function redistributeToVehicles() {
 }
 
 // ============== 更新车型表格显示 ==============
-function updateVehicleTableDisplay() {
-    // 如果有调整数据，强制刷新该车型的显示
-    // 但不改变 state.results，保持原始比例不变
-    // 导出时会优先使用 adjustedVehicleData
+function updateVehicleTableDisplay(vehicle) {
+    // 如果当前显示的是该车型的表格，则刷新显示
+    if (state.currentVehicle === vehicle) {
+        if (window.renderResultsTable) {
+            window.renderResultsTable(vehicle);
+        }
+        if (window.renderSummary) {
+            window.renderSummary(vehicle);
+        }
+    }
 }
 
 // ============== 渲染汇总表格 ==============
@@ -993,7 +1024,7 @@ function renderSummaryTable() {
 
         let adjustmentCell = '-';
         if (isAdjusted) {
-            const changePercent = ((change / original) * 100).toFixed(1);
+            const changePercent = original !== 0 ? ((change / original) * 100).toFixed(1) : '∞';
             const color = change > 0 ? '#00B578' : '#F53F3F';
             adjustmentCell = `<span style="color:${color};font-weight:600">${change > 0 ? '+' : ''}${hasTarget ? Math.round(change) : change.toFixed(2)} (${changePercent}%)</span>`;
         }
