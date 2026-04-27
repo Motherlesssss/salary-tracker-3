@@ -468,7 +468,9 @@ function createSummaryChart() {
                     callbacks: {
                         title: function(context) {
                             const index = context[0].dataIndex;
-                            const vehicles = Object.keys(state.results).filter(v => v !== '__SUMMARY__');
+                            const vehicles = chartData.vehicleBreakdown && chartData.vehicleBreakdown[0]
+                                ? Object.keys(chartData.vehicleBreakdown[0])
+                                : Object.keys(state.results).filter(v => !v.startsWith('__'));
                             const dateObj = state.results[vehicles[0]][index];
                             return dateObj.date;
                         },
@@ -494,7 +496,9 @@ function createSummaryChart() {
                         },
                         afterLabel: function(context) {
                             const index = context.dataIndex;
-                            const vehicles = Object.keys(state.results).filter(v => v !== '__SUMMARY__');
+                            const vehicles = chartData.vehicleBreakdown && chartData.vehicleBreakdown[0]
+                                ? Object.keys(chartData.vehicleBreakdown[0])
+                                : Object.keys(state.results).filter(v => !v.startsWith('__'));
 
                             if (vehicles.length > 0) {
                                 const lines = ['', '车型分解:'];
@@ -571,12 +575,21 @@ function createSummaryChart() {
 
 // ============== 拖拽功能 ==============
 function bindDragEvents(canvas) {
+    // 防止重复绑定：如果已绑定过，先移除旧的事件监听器
+    if (canvas._chartDragHandlers) {
+        canvas.removeEventListener('mousedown', canvas._chartDragHandlers.mousedown);
+        canvas.removeEventListener('mousemove', canvas._chartDragHandlers.mousemove);
+        canvas.removeEventListener('mouseup', canvas._chartDragHandlers.mouseup);
+        canvas.removeEventListener('mouseleave', canvas._chartDragHandlers.mouseleave);
+        canvas.removeEventListener('mouseover', canvas._chartDragHandlers.mouseover);
+    }
+
     let startY = 0;
     let startValue = 0;
     let lastUpdateTime = 0;
     const updateInterval = 50; // 50ms 更新一次，避免过于频繁
 
-    canvas.addEventListener('mousedown', function(e) {
+    const onMouseDown = function(e) {
         const elements = chartInstance.getElementsAtEventForMode(e, 'nearest', { intersect: true }, true);
 
         if (elements.length > 0) {
@@ -597,9 +610,9 @@ function bindDragEvents(canvas) {
 
             canvas.style.cursor = 'grabbing';
         }
-    });
+    };
 
-    canvas.addEventListener('mousemove', function(e) {
+    const onMouseMove = function(e) {
         if (!isDragging || dragBarIndex === null) return;
 
         const rect = canvas.getBoundingClientRect();
@@ -671,9 +684,9 @@ function bindDragEvents(canvas) {
                 }
             }
         }
-    });
+    };
 
-    canvas.addEventListener('mouseup', function() {
+    const onMouseUp = function() {
         if (isDragging) {
             isDragging = false;
 
@@ -708,9 +721,9 @@ function bindDragEvents(canvas) {
             canvas.style.cursor = 'grab';
             dragBarIndex = null;
         }
-    });
+    };
 
-    canvas.addEventListener('mouseleave', function() {
+    const onMouseLeave = function() {
         if (isDragging) {
             isDragging = false;
 
@@ -740,17 +753,34 @@ function bindDragEvents(canvas) {
             canvas.style.cursor = 'default';
             dragBarIndex = null;
         }
-    });
+    };
 
-    canvas.addEventListener('mouseover', function(e) {
+    const onMouseOver = function(e) {
         const elements = chartInstance.getElementsAtEventForMode(e, 'nearest', { intersect: true }, true);
         canvas.style.cursor = elements.length > 0 ? 'grab' : 'default';
-    });
+    };
+
+    // 绑定事件监听器
+    canvas.addEventListener('mousedown', onMouseDown);
+    canvas.addEventListener('mousemove', onMouseMove);
+    canvas.addEventListener('mouseup', onMouseUp);
+    canvas.addEventListener('mouseleave', onMouseLeave);
+    canvas.addEventListener('mouseover', onMouseOver);
+
+    // 保存引用，供下次移除
+    canvas._chartDragHandlers = {
+        mousedown: onMouseDown,
+        mousemove: onMouseMove,
+        mouseup: onMouseUp,
+        mouseleave: onMouseLeave,
+        mouseover: onMouseOver
+    };
 }
 
 // ============== 反向分配到各车型（保持月度总量不变）==============
 function redistributeToVehicles() {
-    const vehicles = Object.keys(state.results).filter(v => v !== '__SUMMARY__');
+    // 只处理当前汇总视图包含的车型（vehicleBreakdown 只包含这些车型的数据）
+    const vehicles = Object.keys(chartData.vehicleBreakdown[0] || {});
     const hasTarget = Object.values(state.vehicleTargets || {}).some(t => t > 0);
 
     if (!hasTarget) {
@@ -949,7 +979,10 @@ function renderSummaryTable() {
     const resultsBody = document.getElementById('resultsBody');
     const resultsTableHead = document.querySelector('#resultsTable thead tr');
 
-    const vehicles = Object.keys(state.results).filter(v => v !== '__SUMMARY__');
+    // 使用当前汇总视图包含的车型（从vehicleBreakdown获取，保持一致性）
+    const vehicles = chartData.vehicleBreakdown && chartData.vehicleBreakdown[0]
+        ? Object.keys(chartData.vehicleBreakdown[0])
+        : Object.keys(state.results).filter(v => !v.startsWith('__'));
     if (vehicles.length === 0) {
         console.warn('[renderSummaryTable] 没有车型数据');
         return;
@@ -1064,7 +1097,9 @@ function renderSummarySummary() {
     const maxIndex = chartData.adjustedAmounts.indexOf(maxAmount);
     const minIndex = chartData.adjustedAmounts.indexOf(minAmount);
 
-    const vehicles = Object.keys(state.results).filter(v => v !== '__SUMMARY__');
+    const vehicles = chartData.vehicleBreakdown && chartData.vehicleBreakdown[0]
+        ? Object.keys(chartData.vehicleBreakdown[0])
+        : Object.keys(state.results).filter(v => !v.startsWith('__'));
 
     // 添加边界检查
     if (!state.results[vehicles[0]] ||
@@ -1155,7 +1190,9 @@ function updateSummaryTargetInput() {
     targetSplitArea.style.display = '';
     vehicleTargetLabel.textContent = '汇总';
 
-    const vehicles = Object.keys(state.results).filter(v => v !== '__SUMMARY__');
+    const vehicles = chartData.vehicleBreakdown && chartData.vehicleBreakdown[0]
+        ? Object.keys(chartData.vehicleBreakdown[0])
+        : Object.keys(state.results).filter(v => !v.startsWith('__'));
     let totalTarget = 0;
 
     // 检查是否有手动拖拽调整

@@ -391,29 +391,26 @@ function generateStoreData() {
         regionVehicleRatios[vehicle] = state.vehicleTargets[vehicle] / regionTotal;
     });
 
-    // 获取区域调整后的日比例（从chartData中获取）
-    if (window.chartData && window.chartData.adjustedVehicleData) {
-        vehicles.forEach(vehicle => {
-            const vehicleData = window.chartData.adjustedVehicleData[vehicle];
-            if (vehicleData) {
-                const vehicleTotal = state.vehicleTargets[vehicle];
-                if (vehicleTotal > 0) {
-                    regionDailyRatios[vehicle] = vehicleData.map(amount =>
-                        Math.max(0, amount) / vehicleTotal
-                    );
-                } else {
-                    regionDailyRatios[vehicle] = vehicleData.map(() => 0);
-                }
+    // 获取区域调整后的日比例（从chartData中获取，缺失的车型回退到原始比例）
+    vehicles.forEach(vehicle => {
+        // 优先使用手动调整后的数据
+        const vehicleData = window.chartData?.adjustedVehicleData?.[vehicle];
+        if (vehicleData && vehicleData.length > 0) {
+            const vehicleTotal = state.vehicleTargets[vehicle];
+            if (vehicleTotal > 0) {
+                regionDailyRatios[vehicle] = vehicleData.map(amount =>
+                    Math.max(0, amount) / vehicleTotal
+                );
+            } else {
+                regionDailyRatios[vehicle] = vehicleData.map(() => 0);
             }
-        });
-    } else {
-        // 如果没有调整，使用原始比例
-        vehicles.forEach(vehicle => {
+        } else if (state.results[vehicle]) {
+            // 没有调整数据，回退到原始比例（新车型、去库存车型等未拖拽过时走这里）
             regionDailyRatios[vehicle] = state.results[vehicle].map(r =>
                 Math.max(0, r.ratio) / 100
             );
-        });
-    }
+        }
+    });
 
     // 为每个门店生成数据
     state.storeData = {};
@@ -421,8 +418,14 @@ function generateStoreData() {
         const storeTotal = Math.max(0, state.storeAllocations[store] || 0);
         const storeVehicles = {};
 
-        // 获取天数
-        const daysCount = regionDailyRatios[vehicles[0]]?.length || 0;
+        // 获取天数（从任何有数据的车型取，避免第一个车型恰好缺失）
+        let daysCount = 0;
+        for (const v of vehicles) {
+            if (regionDailyRatios[v]?.length > 0) {
+                daysCount = regionDailyRatios[v].length;
+                break;
+            }
+        }
 
         // ★★★ 优化后的三层约束算法 ★★★
         // 同时满足三个约束：
@@ -836,10 +839,18 @@ function calculateStoreAdjustedAmounts(storeName) {
 }
 
 function bindStoreChartDragEvents(canvas) {
+    // 防止重复绑定：如果已绑定过，先移除旧的事件监听器
+    if (canvas._storeChartHandlers) {
+        canvas.removeEventListener('mousedown', canvas._storeChartHandlers.mousedown);
+        canvas.removeEventListener('mousemove', canvas._storeChartHandlers.mousemove);
+        canvas.removeEventListener('mouseup', canvas._storeChartHandlers.mouseup);
+        canvas.removeEventListener('mouseleave', canvas._storeChartHandlers.mouseleave);
+    }
+
     let startY = 0;
     let startValue = 0;
 
-    canvas.addEventListener('mousedown', (e) => {
+    const onMouseDown = (e) => {
         const elements = storeChart.getElementsAtEventForMode(e, 'nearest', { intersect: true }, false);
         if (elements.length > 0 && elements[0].datasetIndex === 0) {
             isStoreChartDragging = true;
@@ -848,9 +859,9 @@ function bindStoreChartDragEvents(canvas) {
             startValue = storeChartData.adjustedAmounts[dragStoreDayIndex];
             canvas.style.cursor = 'ns-resize';
         }
-    });
+    };
 
-    canvas.addEventListener('mousemove', (e) => {
+    const onMouseMove = (e) => {
         if (!isStoreChartDragging || dragStoreDayIndex === null) return;
 
         const deltaY = startY - e.clientY;
@@ -878,9 +889,9 @@ function bindStoreChartDragEvents(canvas) {
         // 更新图表
         updateStoreChart();
         updateStoreChartStats(storeChartData.storeName);
-    });
+    };
 
-    canvas.addEventListener('mouseup', () => {
+    const onMouseUp = () => {
         if (isStoreChartDragging) {
             isStoreChartDragging = false;
 
@@ -897,9 +908,9 @@ function bindStoreChartDragEvents(canvas) {
             // 重新渲染表格
             renderStoreDataTable(storeName);
         }
-    });
+    };
 
-    canvas.addEventListener('mouseleave', () => {
+    const onMouseLeave = () => {
         if (isStoreChartDragging) {
             isStoreChartDragging = false;
 
@@ -916,7 +927,20 @@ function bindStoreChartDragEvents(canvas) {
             // 重新渲染表格
             renderStoreDataTable(storeName);
         }
-    });
+    };
+
+    // 使用命名函数绑定，并保存引用以便下次移除
+    canvas.addEventListener('mousedown', onMouseDown);
+    canvas.addEventListener('mousemove', onMouseMove);
+    canvas.addEventListener('mouseup', onMouseUp);
+    canvas.addEventListener('mouseleave', onMouseLeave);
+
+    canvas._storeChartHandlers = {
+        mousedown: onMouseDown,
+        mousemove: onMouseMove,
+        mouseup: onMouseUp,
+        mouseleave: onMouseLeave
+    };
 }
 
 function redistributeStoreDays(adjustedIndex) {
@@ -1250,11 +1274,19 @@ function recalculateStoreVehicleData(storeName) {
         }
     }
 
-    // 更新每日总量
-    storeData.dailyTotals = newDailyTotals;
+    // 更新每日总量（从实际车型数据计算，确保一致性）
+    const finalDailyTotals = [];
+    for (let dayIndex = 0; dayIndex < daysCount; dayIndex++) {
+        let daySum = 0;
+        vehicles.forEach(vehicle => {
+            daySum += storeData.vehicles[vehicle][dayIndex] || 0;
+        });
+        finalDailyTotals.push(daySum);
+    }
+    storeData.dailyTotals = finalDailyTotals;
 
     // 同步更新 state.storeAllocations 的月度总量
-    const newMonthlyTotal = newDailyTotals.reduce((sum, val) => sum + val, 0);
+    const newMonthlyTotal = finalDailyTotals.reduce((sum, val) => sum + val, 0);
     state.storeAllocations[storeName] = newMonthlyTotal;
 
     // 更新区域车型汇总对比（手动调整后实时更新）
@@ -1370,7 +1402,7 @@ function renderStoreDataTable(storeName) {
                  </td>`;
 
         vehicles.forEach((vehicle, idx) => {
-            const amount = storeData.vehicles[vehicle][day] || 0;
+            const amount = (storeData.vehicles[vehicle]?.[day]) || 0;
             totalByVehicle[vehicle] += amount;
             const colors = ['#e3f2fd', '#e8f5e9', '#fff9c4', '#fce4ec', '#f3e5f5', '#e0f7fa'];
             const bgColor = colors[idx % colors.length];
@@ -1454,7 +1486,7 @@ function exportStoreDataToExcel() {
         // 为每个门店添加一行数据
         region.stores.forEach(store => {
             const storeData = state.storeData[store];
-            const vehicleData = storeData.vehicles[vehicle];
+            const vehicleData = storeData.vehicles[vehicle] || new Array(daysCount).fill(0);
 
             const row = [store, ...vehicleData];
             sheetData.push(row);
@@ -1464,7 +1496,8 @@ function exportStoreDataToExcel() {
         const totalRow = ['区域汇总'];
         for (let day = 0; day < daysCount; day++) {
             const dayTotal = region.stores.reduce((sum, store) => {
-                return sum + state.storeData[store].vehicles[vehicle][day];
+                const vData = state.storeData[store].vehicles[vehicle];
+                return sum + (vData ? (vData[day] || 0) : 0);
             }, 0);
             totalRow.push(dayTotal);
         }
@@ -1515,23 +1548,31 @@ function initializeStoreChartButtons() {
             storeChartData.adjustments = {};
 
             // 重新生成门店数据（使用原始比例）
-            const regionVehicles = Object.keys(state.vehicleTargets);
-            const regionTotal = Object.values(state.vehicleTargets).reduce((sum, val) => sum + val, 0);
+            const regionVehicles = Object.keys(state.vehicleTargets).filter(v => !v.startsWith('__'));
+            const regionTotal = regionVehicles.reduce((sum, v) => sum + (state.vehicleTargets[v] || 0), 0);
 
-            // 重新按原始比例分配
+            // 重新按原始比例分配（使用最大余数法确保整数分配精确）
             regionVehicles.forEach(vehicle => {
                 const vehicleRatio = state.vehicleTargets[vehicle] / regionTotal;
                 const vehicleTarget = Math.round(storeData.monthlyTarget * vehicleRatio);
 
-                // 按原始日比例分配
+                // 按原始日比例分配，使用最大余数法
                 const vehicleDailyRatios = state.results[vehicle].map(r => r.ratio / 100);
-                const dailyAmounts = vehicleDailyRatios.map(ratio => Math.round(vehicleTarget * ratio));
+                const exactValues = vehicleDailyRatios.map(ratio => vehicleTarget * ratio);
+                const floorValues = exactValues.map(v => Math.floor(v));
+                const distributed = floorValues.reduce((a, b) => a + b, 0);
+                const extra = Math.round(vehicleTarget - distributed);
 
-                // 调整余数
-                const sum = dailyAmounts.reduce((a, b) => a + b, 0);
-                const diff = vehicleTarget - sum;
-                if (diff !== 0 && dailyAmounts.length > 0) {
-                    dailyAmounts[0] += diff;
+                // 按小数部分降序，将余量优先分给余数最大的日期
+                const remainders = exactValues.map((v, i) => ({
+                    index: i,
+                    remainder: v - Math.floor(v)
+                }));
+                remainders.sort((a, b) => b.remainder - a.remainder);
+
+                const dailyAmounts = [...floorValues];
+                for (let i = 0; i < extra && i < remainders.length; i++) {
+                    dailyAmounts[remainders[i].index]++;
                 }
 
                 storeData.vehicles[vehicle] = dailyAmounts;
@@ -1834,6 +1875,11 @@ function parsePresetVehicleTargets(jsonData, header, region, statusElem) {
 
             // 更新门店总目标
             state.storeAllocations[storeName] = storeTotal;
+            // 同步更新 storeAllocationData.allocations
+            const storeIndex = storeAllocationData.labels.indexOf(storeName);
+            if (storeIndex !== -1) {
+                storeAllocationData.allocations[storeIndex] = storeTotal;
+            }
             successCount++;
         } else {
             unmatchedStores.push(storeName);
@@ -2098,6 +2144,11 @@ function parseAutoAllocations(jsonData, header, region, statusElem) {
         if (region.stores.includes(storeName)) {
             if (!isNaN(targetValue) && targetValue >= 0) {
                 state.storeAllocations[storeName] = targetValue;
+                // 同步更新 storeAllocationData.allocations
+                const storeIndex = storeAllocationData.labels.indexOf(storeName);
+                if (storeIndex !== -1) {
+                    storeAllocationData.allocations[storeIndex] = targetValue;
+                }
                 successCount++;
             }
         } else {
@@ -2160,8 +2211,11 @@ function renderRegionVehicleSummary() {
         const storeData = state.storeData[store];
         if (storeData) {
             vehicles.forEach(vehicle => {
-                const vehicleTotal = storeData.vehicles[vehicle].reduce((sum, val) => sum + val, 0);
-                regionVehicleTotals[vehicle] += vehicleTotal;
+                const vehicleArr = storeData.vehicles[vehicle];
+                if (vehicleArr) {
+                    const vehicleTotal = vehicleArr.reduce((sum, val) => sum + (val || 0), 0);
+                    regionVehicleTotals[vehicle] += vehicleTotal;
+                }
             });
         }
     });
