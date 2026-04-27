@@ -98,6 +98,228 @@
         .stat-card.changed .value {
             color: var(--warning);
         }
+
+        /* 车型管理区域样式 */
+        .vehicle-config-hint {
+            background: #E3F2FD;
+            padding: 16px;
+            border-radius: 8px;
+            margin-bottom: 24px;
+            border-left: 4px solid #2196F3;
+        }
+
+        .vehicle-config-hint p {
+            margin: 0 0 8px 0;
+            font-weight: 600;
+            color: #1976D2;
+        }
+
+        .vehicle-management-area {
+            background: white;
+            border-radius: 12px;
+            border: 2px solid #E5E8EB;
+            overflow: hidden;
+        }
+
+        .vehicle-list-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 20px;
+            background: #F5F7FA;
+            border-bottom: 1px solid #E5E8EB;
+        }
+
+        .vehicle-list-header h3 {
+            margin: 0;
+            font-size: 16px;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .vehicle-list-container {
+            overflow-x: auto;
+        }
+
+        .vehicle-list-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .vehicle-list-table thead th {
+            background: #FAFBFC;
+            padding: 12px 16px;
+            text-align: left;
+            font-size: 13px;
+            font-weight: 600;
+            color: #666;
+            border-bottom: 2px solid #E5E8EB;
+        }
+
+        .vehicle-list-table tbody td {
+            padding: 14px 16px;
+            border-bottom: 1px solid #F0F0F0;
+            font-size: 14px;
+        }
+
+        .vehicle-list-table tbody tr:hover {
+            background: #FAFBFC;
+        }
+
+        .vehicle-list-table tbody tr.disabled {
+            opacity: 0.5;
+            background: #F9F9F9;
+        }
+
+        .vehicle-list-table tbody tr.clear-stock {
+            background: #FFF3E0;
+        }
+
+        .vehicle-list-table tbody tr.new-vehicle {
+            background: #E3F2FD;
+        }
+
+        .vehicle-type-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .vehicle-type-badge.historical {
+            background: #E8F5E9;
+            color: #2E7D32;
+        }
+
+        .vehicle-type-badge.new {
+            background: #E3F2FD;
+            color: #1976D2;
+        }
+
+        .vehicle-type-badge.clear-stock {
+            background: #FFF3E0;
+            color: #F57C00;
+        }
+
+        .vehicle-config-feedback {
+            margin-top: 12px;
+            font-size: 13px;
+            color: #666;
+        }
+
+        /* 模态框样式 */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .modal-content {
+            background: white;
+            border-radius: 16px;
+            padding: 32px;
+            max-width: 500px;
+            width: 90%;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+        }
+
+        .modal-header {
+            margin-bottom: 24px;
+        }
+
+        .modal-header h3 {
+            margin: 0;
+            font-size: 20px;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .modal-body {
+            margin-bottom: 24px;
+        }
+
+        .modal-form-group {
+            margin-bottom: 20px;
+        }
+
+        .modal-form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            color: #555;
+        }
+
+        .modal-form-group input,
+        .modal-form-group select {
+            width: 100%;
+            padding: 10px 14px;
+            border: 2px solid #E5E8EB;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.2s;
+        }
+
+        .modal-form-group input:focus,
+        .modal-form-group select:focus {
+            outline: none;
+            border-color: #2196F3;
+        }
+
+        .modal-template-options {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .modal-template-option {
+            display: flex;
+            align-items: flex-start;
+            padding: 12px;
+            border: 2px solid #E5E8EB;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .modal-template-option:hover {
+            border-color: #2196F3;
+            background: #F5F9FF;
+        }
+
+        .modal-template-option input[type="radio"] {
+            margin-right: 12px;
+            margin-top: 2px;
+        }
+
+        .modal-template-label {
+            flex: 1;
+        }
+
+        .modal-template-label strong {
+            display: block;
+            margin-bottom: 4px;
+            color: #333;
+        }
+
+        .modal-template-label span {
+            font-size: 13px;
+            color: #666;
+        }
+
+        .modal-footer {
+            display: flex;
+            justify-content: flex-end;
+            gap: 12px;
+        }
     </style>
 </head>
 <body>
@@ -126,7 +348,7 @@
 
         <main>
             <!-- 步骤1: 选择区域 -->
-            <section class="card">
+            <section class="card" data-step="1">
                 <div class="card-header">
                     <span class="step-number">1</span>
                     <h2>选择区域</h2>
@@ -166,7 +388,7 @@
             </section>
 
             <!-- 步骤2: 上传历史数据 -->
-            <section class="card">
+            <section class="card" data-step="2">
                 <div class="card-header">
                     <span class="step-number">2</span>
                     <h2>上传历史数据</h2>
@@ -188,8 +410,59 @@
                 </div>
             </section>
 
+            <!-- 步骤2.5: 车型管理 (新增) -->
+            <section class="card hidden" data-step="2.5" id="vehicleManagementSection">
+                <div class="card-header">
+                    <span class="step-number">2.5</span>
+                    <h2>车型管理</h2>
+                    <span class="header-tag">必选</span>
+                </div>
+                <div class="card-body">
+                    <div class="vehicle-config-hint">
+                        <p>📋 系统已从历史数据中提取车型，请确认配置后继续。您可以：</p>
+                        <ul style="margin: 8px 0 0 24px; color: #666;">
+                            <li>标记即将去库存的历史车型</li>
+                            <li>添加即将上市的新车型</li>
+                            <li>停用不需要的车型</li>
+                        </ul>
+                    </div>
+
+                    <!-- 车型列表 -->
+                    <div class="vehicle-management-area">
+                        <div class="vehicle-list-header">
+                            <h3>车型列表</h3>
+                            <button type="button" id="addNewVehicleBtn" class="btn btn-primary">➕ 添加新车型</button>
+                        </div>
+                        <div class="vehicle-list-container">
+                            <table class="vehicle-list-table">
+                                <thead>
+                                    <tr>
+                                        <th>车型代码</th>
+                                        <th>车型名称</th>
+                                        <th>类型</th>
+                                        <th>配置</th>
+                                        <th>操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="vehicleListBody">
+                                    <!-- 动态生成 -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- 确认按钮 -->
+                    <div style="margin-top: 24px; text-align: center;">
+                        <button id="confirmVehicleConfigBtn" class="btn btn-success btn-lg" disabled>
+                            ✓ 确认车型配置
+                        </button>
+                        <p id="vehicleConfigFeedback" class="vehicle-config-feedback"></p>
+                    </div>
+                </div>
+            </section>
+
             <!-- 步骤3: 选择预测月份 -->
-            <section class="card">
+            <section class="card" data-step="3">
                 <div class="card-header">
                     <span class="step-number">3</span>
                     <h2>选择预测月份</h2>
@@ -245,7 +518,7 @@
             </section>
 
             <!-- 步骤4: 标记特殊节点 -->
-            <section class="card">
+            <section class="card" data-step="4">
                 <div class="card-header">
                     <span class="step-number">4</span>
                     <h2>标记特殊节点</h2>
@@ -274,7 +547,7 @@
             </section>
 
             <!-- 步骤5: 生成比例 -->
-            <section class="card">
+            <section class="card" data-step="5">
                 <div class="card-header">
                     <span class="step-number">5</span>
                     <h2>生成分配比例</h2>
@@ -291,7 +564,7 @@
             </section>
 
             <!-- 步骤6: 查看结果 -->
-            <section class="card hidden" id="resultsSection">
+            <section class="card hidden" id="resultsSection" data-step="6">
                 <div class="card-header">
                     <span class="step-number">6</span>
                     <h2>分配比例结果</h2>
@@ -394,7 +667,7 @@
             </section>
 
             <!-- 步骤7: 门店分配 -->
-            <section class="card hidden" id="storeAllocationSection">
+            <section class="card hidden" id="storeAllocationSection" data-step="7">
                 <div class="card-header">
                     <span class="step-number">7</span>
                     <h2>门店目标分配</h2>
@@ -503,6 +776,7 @@
     <script src="https://cdn.bootcdn.net/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <script src="https://cdn.bootcdn.net/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
     <script src="https://cdn.bootcdn.net/ajax/libs/chartjs-plugin-datalabels/2.2.0/chartjs-plugin-datalabels.min.js"></script>
+    <script src="vehicle-templates.js"></script>
     <script src="app.js"></script>
     <script src="demo-chart.js"></script>
     <script src="store-allocation.js"></script>
